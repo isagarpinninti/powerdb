@@ -54,6 +54,10 @@ fn view_gate(who: &Principal, def: &CollectionDef) -> Gate {
 pub async fn list(State(st): State<AppState>, Caller(who): Caller, Path(name): Path<String>, Query(params): Query<HashMap<String, String>>) -> Result<Json<Value>, ApiError> {
     let def = collection(&st, &name).await?;
     let g = gate(&who, &def, Action::List)?;
+    // a rule that never looks at the record is one yes-or-no for this caller: say no now (401 for an anonymous caller) instead of returning an empty list
+    if matches!(&g, Gate::Rule(e) if !e.uses_record()) {
+        authorize(&who, &def, Action::List, None, None)?;
+    }
     let q: ListQuery = query::parse(&params, &def)?;
     let vg = view_gate(&who, &def);
     let (st2, who2, def2) = (st.clone(), who.clone(), def.clone());

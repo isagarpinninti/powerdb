@@ -179,6 +179,15 @@ async fn only_the_owner_may_change_or_delete_and_nobody_may_forge_ownership() {
 }
 
 #[tokio::test]
+async fn a_list_rule_that_ignores_the_record_is_decided_up_front() {
+    let a = app();
+    mk_collection(&a, invoices(json!({"list": "@request.auth.id != \"\"", "create": ""}), false)).await;
+    let u = mk_user(&a, "alice@example.com").await;
+    assert_eq!(get(&a, "/api/v1/collections/invoices/records", None).await.status, StatusCode::UNAUTHORIZED, "anonymous is told so, not shown an empty list");
+    assert_eq!(get(&a, "/api/v1/collections/invoices/records", Some(&u)).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn the_list_rule_hides_records_instead_of_failing() {
     let a = app();
     let rules = json!({"list": "@request.auth.id == owner_id", "view": "@request.auth.id == owner_id", "create": ""});
@@ -196,6 +205,8 @@ async fn the_list_rule_hides_records_instead_of_failing() {
     json(&a, Method::POST, "/api/v1/collections/invoices/records", Some(&a.admin), json!({"client": "orphan"})).await;
     let mine = get(&a, "/api/v1/collections/invoices/records", Some(&alice)).await.json();
     assert_eq!(mine["items"].as_array().unwrap().len(), 2);
+    assert_eq!(get(&a, "/api/v1/collections/invoices/records", None).await.status, StatusCode::OK, "a rule about the record filters: anonymous sees an empty list, not an error");
+    assert_eq!(get(&a, "/api/v1/collections/invoices/records", None).await.json()["items"].as_array().unwrap().len(), 0);
     assert_eq!(get(&a, "/api/v1/collections/invoices/records", Some(&bob)).await.json()["items"].as_array().unwrap().len(), 1, "bob does not see ownerless records either");
     assert_eq!(get(&a, "/api/v1/collections/invoices/records", Some(&a.admin)).await.json()["items"].as_array().unwrap().len(), 4);
 }

@@ -426,6 +426,16 @@ fn order(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 }
 
 impl Expr {
+    /// Whether the expression reads the record. A rule that does not (`@request.auth.id != ""`) has one answer for the whole request and can be decided before looking at any record.
+    pub fn uses_record(&self) -> bool {
+        match self {
+            Expr::Path { at, .. } => !*at,
+            Expr::Lit(_) | Expr::List(_) => false,
+            Expr::Not(a) => a.uses_record(),
+            Expr::And(a, b) | Expr::Or(a, b) | Expr::Cmp(_, a, b) => a.uses_record() || b.uses_record(),
+        }
+    }
+
     pub fn eval(&self, c: &Ctx<'_>) -> Value {
         match self {
             Expr::Lit(v) => v.clone(),
