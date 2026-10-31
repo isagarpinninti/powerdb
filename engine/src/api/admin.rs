@@ -239,3 +239,33 @@ pub async fn gc(State(st): State<AppState>, Caller(who): Caller) -> Result<Json<
         json!({"files_released": g.files_released, "bytes_reclaimed": c.bytes_reclaimed, "segments_compacted": c.segments_compacted}),
     ))
 }
+
+/// Prometheus text exposition of the same numbers as `/stats`, for monitoring. Administrators only: it describes the
+/// server's storage, and a scraper is given an API key with admin access.
+pub async fn metrics(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    admin(&who)?;
+    let db = st.db.clone();
+    let s = blocking(move || db.stats()).await?;
+    let body = format!(
+        "# HELP powerdb_info Build information.\n# TYPE powerdb_info gauge\npowerdb_info{{version=\"{}\"}} 1\n\
+         # HELP powerdb_blob_segments Segment files in the blob log.\n# TYPE powerdb_blob_segments gauge\npowerdb_blob_segments {}\n\
+         # HELP powerdb_blob_log_bytes Bytes in the blob log.\n# TYPE powerdb_blob_log_bytes gauge\npowerdb_blob_log_bytes {}\n\
+         # HELP powerdb_blob_dead_bytes Bytes in the blob log no record refers to; compaction reclaims them.\n# TYPE powerdb_blob_dead_bytes gauge\npowerdb_blob_dead_bytes {}\n\
+         # HELP powerdb_gc_pending Chunks queued for garbage collection.\n# TYPE powerdb_gc_pending gauge\npowerdb_gc_pending {}\n",
+        env!("CARGO_PKG_VERSION"),
+        s.segments,
+        s.log_bytes,
+        s.dead_bytes,
+        s.gc_pending
+    );
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        body,
+    ))
+}

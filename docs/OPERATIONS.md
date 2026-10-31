@@ -23,6 +23,9 @@ cannot be recovered, so store the secret separately (or set `POWERDB_SECRET`). R
 `powerdb restore --from DIR --data NEWDIR`, then `powerdb check`.
 There is no hot backup yet.
 
+## Monitoring
+`GET /api/v1/healthz` is unauthenticated liveness. `GET /api/v1/metrics` is Prometheus text (blob log size, dead bytes, GC backlog, version) and needs an admin API key: `authorization: Bearer pdb_live_...`. Alert on `powerdb_blob_dead_bytes` growing without bound and on a failing `powerdb check`.
+
 ## Health and integrity
 `powerdb status` (liveness), `powerdb check` (re-hashes all chunks, recomputes reference counts; `--quick` skips chunk hashing).
 

@@ -8,4 +8,6 @@
 - Built-in HTTPS (rustls) with hourly certificate reload; `status` probes HTTP or HTTPS.
 - Data format marker (`FORMAT`); newer layouts are refused untouched.
 - Crash test: a committing writer is killed repeatedly; acknowledged writes survive.
+- Prometheus `/api/v1/metrics` (admin only).
+- Fix: the lock could outlive `drop(db)` while the fsync thread finished (found by CI on macOS Intel).
 - Packaging and CI written; verified on macOS arm64 only.

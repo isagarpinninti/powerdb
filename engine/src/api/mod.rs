@@ -261,6 +261,7 @@ pub fn router(state: AppState) -> Router {
         .route("/users", get(admin::list_users).post(admin::create_user))
         .route("/users/{id}", axum::routing::delete(admin::delete_user))
         .route("/stats", get(admin::stats))
+        .route("/metrics", get(admin::metrics))
         .route("/maintenance/gc", post(admin::gc))
         // JSON bodies are small; uploads stream and enforce their own limits per field
         .layer(DefaultBodyLimit::max(1 << 20));

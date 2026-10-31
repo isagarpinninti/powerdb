@@ -1195,6 +1195,7 @@ async fn admin_endpoints_need_an_administrator_and_rules_must_parse() {
         (Method::GET, "/api/v1/users"),
         (Method::GET, "/api/v1/keys"),
         (Method::GET, "/api/v1/stats"),
+        (Method::GET, "/api/v1/metrics"),
         (Method::POST, "/api/v1/maintenance/gc"),
     ] {
         assert_eq!(
@@ -1240,6 +1241,13 @@ async fn admin_endpoints_need_an_administrator_and_rules_must_parse() {
     assert_eq!(
         get(&a, "/api/v1/stats", Some(&a.admin)).await.status,
         StatusCode::OK
+    );
+    let m = get(&a, "/api/v1/metrics", Some(&a.admin)).await;
+    assert_eq!(m.status, StatusCode::OK);
+    let text = String::from_utf8(m.body.to_vec()).unwrap();
+    assert!(
+        text.contains("powerdb_blob_log_bytes ")
+            && text.contains("# TYPE powerdb_gc_pending gauge")
     );
 }
 
