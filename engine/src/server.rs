@@ -22,18 +22,38 @@ pub fn build_state(dir: &Path, opts: Options, cfg: Config) -> Result<(AppState, 
     db.register_codec(Arc::new(ChaChaCodec::new(&secrets)));
     let auth = Auth::new(&db, secrets.derive("sessions"))?;
     let signer = UrlSigner::new(&secrets);
-    let mut boot = Bootstrap { admin_key: None, admin_user: None };
+    let mut boot = Bootstrap {
+        admin_key: None,
+        admin_user: None,
+    };
     // First run: nothing exists, so nobody could ever sign in. Create an administrator from the environment if given, else mint one admin API key.
     if auth.user_count()? == 0 && auth.keys()?.is_empty() {
-        match (std::env::var("POWERDB_ADMIN_EMAIL"), std::env::var("POWERDB_ADMIN_PASSWORD")) {
+        match (
+            std::env::var("POWERDB_ADMIN_EMAIL"),
+            std::env::var("POWERDB_ADMIN_PASSWORD"),
+        ) {
             (Ok(e), Ok(p)) => {
                 auth.register(&e, &p, Role::Admin)?;
                 boot.admin_user = Some(e);
             }
-            _ => boot.admin_key = Some(auth.create_key("bootstrap admin", Access::ReadWrite, vec![], true)?.0),
+            _ => {
+                boot.admin_key = Some(
+                    auth.create_key("bootstrap admin", Access::ReadWrite, vec![], true)?
+                        .0,
+                )
+            }
         }
     }
-    Ok((AppState { db, auth, signer, cfg: Arc::new(cfg), limiter: Arc::new(Limiter::new()) }, boot))
+    Ok((
+        AppState {
+            db,
+            auth,
+            signer,
+            cfg: Arc::new(cfg),
+            limiter: Arc::new(Limiter::new()),
+        },
+        boot,
+    ))
 }
 
 /// Space reclamation while the server runs: release deleted files often, compact mostly-dead segments now and then.

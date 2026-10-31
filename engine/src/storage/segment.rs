@@ -5,9 +5,9 @@
 //! A crash can leave a torn entry at the end of the newest segment; `open` finds the last whole entry and truncates there.
 
 use crate::error::{Error, Result};
+use crate::fileio::{read_exact_at, write_all_at};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use crate::fileio::{read_exact_at, write_all_at};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
@@ -95,7 +95,11 @@ fn parse_header(h: &[u8; HEADER as usize]) -> Option<([u8; 32], u32, u32, u8)> {
 }
 
 /// Reads whole entries from the start of a segment until one is missing or malformed. Returns the offset just past the last good entry.
-fn scan_file(file: &File, seg: u32, mut visit: impl FnMut(ScannedEntry) -> Result<()>) -> Result<u64> {
+fn scan_file(
+    file: &File,
+    seg: u32,
+    mut visit: impl FnMut(ScannedEntry) -> Result<()>,
+) -> Result<u64> {
     let total = file.metadata()?.len();
     let mut off = 0u64;
     let mut h = [0u8; HEADER as usize];
@@ -103,12 +107,23 @@ fn scan_file(file: &File, seg: u32, mut visit: impl FnMut(ScannedEntry) -> Resul
         if read_exact_at(file, &mut h, off).is_err() {
             break;
         }
-        let Some((key, raw_len, stored_len, flags)) = parse_header(&h) else { break };
+        let Some((key, raw_len, stored_len, flags)) = parse_header(&h) else {
+            break;
+        };
         let end = off + HEADER + stored_len as u64;
         if end > total {
             break;
         }
-        visit(ScannedEntry { key, ptr: ChunkPtr { seg, off, stored_len, raw_len, flags } })?;
+        visit(ScannedEntry {
+            key,
+            ptr: ChunkPtr {
+                seg,
+                off,
+                stored_len,
+                raw_len,
+                flags,
+            },
+        })?;
         off = end;
     }
     Ok(off)
@@ -119,12 +134,23 @@ impl SegmentLog {
         fs::create_dir_all(dir)?;
         let mut ids: Vec<u32> = fs::read_dir(dir)?
             .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_prefix("seg-")?.strip_suffix(".pdb")?.parse().ok()))
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_prefix("seg-")?.strip_suffix(".pdb")?.parse().ok())
+            })
             .collect();
         ids.sort_unstable();
         let id = ids.last().copied().unwrap_or(1);
         let path = seg_path(dir, id);
-        let file = Arc::new(OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?);
+        let file = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)?,
+        );
         // Drop a torn tail so new entries start at a clean boundary.
         let good = scan_file(&file, id, |_| Ok(()))?;
         if good != file.metadata()?.len() {
@@ -133,7 +159,18 @@ impl SegmentLog {
         }
         let mut readers = HashMap::new();
         readers.insert(id, file.clone());
-        Ok(Self { sync_state: Mutex::new(SyncState::default()), sync_cv: Condvar::new(), dir: dir.to_path_buf(), max_bytes, active: Mutex::new(Active { id, file, len: good }), readers: RwLock::new(readers) })
+        Ok(Self {
+            sync_state: Mutex::new(SyncState::default()),
+            sync_cv: Condvar::new(),
+            dir: dir.to_path_buf(),
+            max_bytes,
+            active: Mutex::new(Active {
+                id,
+                file,
+                len: good,
+            }),
+            readers: RwLock::new(readers),
+        })
     }
 
     pub fn active_id(&self) -> u32 {
@@ -143,7 +180,11 @@ impl SegmentLog {
     pub fn segment_ids(&self) -> Result<Vec<u32>> {
         let mut ids: Vec<u32> = fs::read_dir(&self.dir)?
             .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_prefix("seg-")?.strip_suffix(".pdb")?.parse().ok()))
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_prefix("seg-")?.strip_suffix(".pdb")?.parse().ok())
+            })
             .collect();
         ids.sort_unstable();
         Ok(ids)
@@ -162,7 +203,13 @@ impl SegmentLog {
     }
 
     /// Appends one entry and returns where it landed. Rolls to a new segment when the active one is full.
-    pub fn append(&self, key: &[u8; 32], raw_len: u32, flags: u8, payload: &[u8]) -> Result<ChunkPtr> {
+    pub fn append(
+        &self,
+        key: &[u8; 32],
+        raw_len: u32,
+        flags: u8,
+        payload: &[u8],
+    ) -> Result<ChunkPtr> {
         if payload.len() > u32::MAX as usize {
             return Err(Error::Invalid("a chunk cannot exceed 4 GiB".into()));
         }
@@ -179,15 +226,34 @@ impl SegmentLog {
         if a.len > 0 && a.len + entry > self.max_bytes {
             a.file.sync_data()?; // seal the old segment durably before moving on
             let id = a.id + 1;
-            let file = Arc::new(OpenOptions::new().read(true).write(true).create(true).truncate(true).open(seg_path(&self.dir, id))?);
-            self.readers.write().unwrap_or_else(|e| e.into_inner()).insert(id, file.clone());
+            let file = Arc::new(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(seg_path(&self.dir, id))?,
+            );
+            self.readers
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id, file.clone());
             *a = Active { id, file, len: 0 };
         }
         let off = a.len;
         write_all_at(&a.file, &buf, off)?;
         a.len += entry;
-        self.sync_state.lock().unwrap_or_else(|e| e.into_inner()).appended += 1;
-        Ok(ChunkPtr { seg: a.id, off, stored_len: payload.len() as u32, raw_len, flags })
+        self.sync_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appended += 1;
+        Ok(ChunkPtr {
+            seg: a.id,
+            off,
+            stored_len: payload.len() as u32,
+            raw_len,
+            flags,
+        })
     }
 
     /// Makes everything appended so far durable. Callers that arrive while a sync is running wait for it, and for at most one more, instead of each paying for their own.
@@ -205,7 +271,12 @@ impl SegmentLog {
             st.syncing = true;
             let target = st.appended;
             drop(st);
-            let file = self.active.lock().unwrap_or_else(|e| e.into_inner()).file.clone();
+            let file = self
+                .active
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .file
+                .clone();
             let r = file.sync_data();
             st = self.sync_state.lock().unwrap_or_else(|e| e.into_inner());
             st.syncing = false;
@@ -218,11 +289,23 @@ impl SegmentLog {
     }
 
     fn reader(&self, seg: u32) -> Result<Arc<File>> {
-        if let Some(f) = self.readers.read().unwrap_or_else(|e| e.into_inner()).get(&seg) {
+        if let Some(f) = self
+            .readers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&seg)
+        {
             return Ok(f.clone());
         }
-        let f = Arc::new(OpenOptions::new().read(true).open(seg_path(&self.dir, seg))?);
-        self.readers.write().unwrap_or_else(|e| e.into_inner()).insert(seg, f.clone());
+        let f = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .open(seg_path(&self.dir, seg))?,
+        );
+        self.readers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(seg, f.clone());
         Ok(f)
     }
 
@@ -253,9 +336,14 @@ impl SegmentLog {
     /// Deletes a sealed segment. Readers that already hold the file keep working (the data stays until they let go).
     pub fn remove_segment(&self, seg: u32) -> Result<()> {
         if seg == self.active_id() {
-            return Err(Error::Invalid("the active segment cannot be removed".into()));
+            return Err(Error::Invalid(
+                "the active segment cannot be removed".into(),
+            ));
         }
-        self.readers.write().unwrap_or_else(|e| e.into_inner()).remove(&seg);
+        self.readers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&seg);
         match fs::remove_file(seg_path(&self.dir, seg)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

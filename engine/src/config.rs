@@ -46,7 +46,9 @@ impl FileConfig {
     pub fn load(data_dir: &Path) -> Result<Option<FileConfig>> {
         let path = data_dir.join(FILE_NAME);
         match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&text).map(Some).map_err(|e| Error::Invalid(format!("{}: {e}", path.display()))),
+            Ok(text) => Self::parse(&text)
+                .map(Some)
+                .map_err(|e| Error::Invalid(format!("{}: {e}", path.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -61,7 +63,9 @@ pub fn parse_durability(name: &str, interval_ms: u64) -> Result<Durability> {
         "commit" => Ok(Durability::Commit),
         "interval" => Ok(Durability::Interval(interval_ms.max(1))),
         "never" => Ok(Durability::Never),
-        other => Err(Error::Invalid(format!("durability must be commit, interval or never, not \"{other}\""))),
+        other => Err(Error::Invalid(format!(
+            "durability must be commit, interval or never, not \"{other}\""
+        ))),
     }
 }
 
@@ -69,7 +73,12 @@ impl Settings {
     pub fn resolve(cli: Overrides, file: Option<FileConfig>) -> Result<Settings> {
         let file = file.unwrap_or_default();
         let interval = cli.interval_ms.or(file.interval_ms).unwrap_or(100);
-        let durability = parse_durability(&cli.durability.or(file.durability).unwrap_or_else(|| "commit".into()), interval)?;
+        let durability = parse_durability(
+            &cli.durability
+                .or(file.durability)
+                .unwrap_or_else(|| "commit".into()),
+            interval,
+        )?;
         let mut cors = file.cors_origins.unwrap_or_default();
         if !cli.cors_origins.is_empty() {
             cors = cli.cors_origins; // given on the command line: replaces the file's list
@@ -81,7 +90,17 @@ impl Settings {
             max_upload_bytes: cli.max_upload_gib.or(file.max_upload_gib).unwrap_or(5) << 30,
             ..ApiConfig::default()
         };
-        Ok(Settings { addr: cli.addr.or(file.addr).unwrap_or_else(|| "127.0.0.1:8090".parse().expect("a valid default address")), api, options: Options { durability, ..Options::default() } })
+        Ok(Settings {
+            addr: cli
+                .addr
+                .or(file.addr)
+                .unwrap_or_else(|| "127.0.0.1:8090".parse().expect("a valid default address")),
+            api,
+            options: Options {
+                durability,
+                ..Options::default()
+            },
+        })
     }
 }
 
@@ -122,7 +141,11 @@ mod tests {
     #[test]
     fn defaults_are_the_safe_ones() {
         let s = Settings::resolve(Overrides::default(), None).unwrap();
-        assert_eq!(s.addr.to_string(), "127.0.0.1:8090", "listens on this machine only");
+        assert_eq!(
+            s.addr.to_string(),
+            "127.0.0.1:8090",
+            "listens on this machine only"
+        );
         assert_eq!(s.options.durability, Durability::Commit);
         assert!(!s.api.open_registration && !s.api.trust_proxy && s.api.cors_origins.is_empty());
     }
@@ -130,7 +153,13 @@ mod tests {
     #[test]
     fn the_template_parses_and_means_the_defaults() {
         let f = FileConfig::parse(TEMPLATE).unwrap();
-        assert_eq!(Settings::resolve(Overrides::default(), Some(f)).unwrap().options.durability, Durability::Commit);
+        assert_eq!(
+            Settings::resolve(Overrides::default(), Some(f))
+                .unwrap()
+                .options
+                .durability,
+            Durability::Commit
+        );
     }
 
     #[test]
@@ -141,7 +170,12 @@ mod tests {
         assert_eq!(s.options.durability, Durability::Interval(250));
         assert_eq!(s.api.max_upload_bytes, 2 << 30);
         assert_eq!(s.api.cors_origins, vec!["https://a.example"]);
-        let cli = Overrides { addr: Some("127.0.0.1:1234".parse().unwrap()), durability: Some("never".into()), cors_origins: vec!["https://b.example".into()], ..Default::default() };
+        let cli = Overrides {
+            addr: Some("127.0.0.1:1234".parse().unwrap()),
+            durability: Some("never".into()),
+            cors_origins: vec!["https://b.example".into()],
+            ..Default::default()
+        };
         let s = Settings::resolve(cli, Some(file)).unwrap();
         assert_eq!(s.addr.port(), 1234);
         assert_eq!(s.options.durability, Durability::Never);
@@ -153,6 +187,15 @@ mod tests {
         assert!(FileConfig::parse("adr = \"127.0.0.1:1\"").is_err());
         assert!(FileConfig::parse("durability = 5").is_err());
         assert!(FileConfig::parse("addr = \"not an address\"").is_err());
-        assert!(Settings::resolve(Overrides { durability: Some("sometimes".into()), ..Default::default() }, None).is_err());
+        assert!(
+            Settings::resolve(
+                Overrides {
+                    durability: Some("sometimes".into()),
+                    ..Default::default()
+                },
+                None
+            )
+            .is_err()
+        );
     }
 }

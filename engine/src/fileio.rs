@@ -22,7 +22,12 @@ pub fn read_exact_at(f: &File, mut buf: &mut [u8], mut off: u64) -> io::Result<(
     use std::os::windows::fs::FileExt;
     while !buf.is_empty() {
         match f.seek_read(buf, off) {
-            Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill the whole buffer")),
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "failed to fill the whole buffer",
+                ));
+            }
             Ok(n) => {
                 buf = &mut buf[n..];
                 off += n as u64;
@@ -39,7 +44,12 @@ pub fn write_all_at(f: &File, mut buf: &[u8], mut off: u64) -> io::Result<()> {
     use std::os::windows::fs::FileExt;
     while !buf.is_empty() {
         match f.seek_write(buf, off) {
-            Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "failed to write the whole buffer")),
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write the whole buffer",
+                ));
+            }
             Ok(n) => {
                 buf = &buf[n..];
                 off += n as u64;

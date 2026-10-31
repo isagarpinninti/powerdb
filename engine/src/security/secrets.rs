@@ -32,13 +32,19 @@ impl Secrets {
     /// Reads the secret from the environment, else from `<dir>/secret.key`, else creates that file.
     pub fn load_or_create(dir: &Path) -> Result<Self> {
         if let Ok(v) = std::env::var("POWERDB_SECRET") {
-            let k = from_hex_32(v.trim()).ok_or_else(|| Error::Invalid("POWERDB_SECRET must be exactly 64 hex characters".into()))?;
+            let k = from_hex_32(v.trim()).ok_or_else(|| {
+                Error::Invalid("POWERDB_SECRET must be exactly 64 hex characters".into())
+            })?;
             return Ok(Self { master: k });
         }
         std::fs::create_dir_all(dir)?;
         let path = dir.join("secret.key");
         match std::fs::read_to_string(&path) {
-            Ok(s) => Ok(Self { master: from_hex_32(s.trim()).ok_or_else(|| Error::Corrupt(format!("{} is not 64 hex characters", path.display())))? }),
+            Ok(s) => Ok(Self {
+                master: from_hex_32(s.trim()).ok_or_else(|| {
+                    Error::Corrupt(format!("{} is not 64 hex characters", path.display()))
+                })?,
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let k: [u8; 32] = random_bytes();
                 use std::io::Write;

@@ -15,10 +15,10 @@ use crate::model::{CollectionDef, Record};
 use crate::security::expr::{self, Ctx};
 use crate::security::signed_url::UrlSigner;
 use crate::storage::Db;
-use axum::extract::{DefaultBodyLimit, FromRequestParts};
-use axum::http::{header, request::Parts, HeaderValue, Method};
-use axum::routing::{get, post};
 use axum::Router;
+use axum::extract::{DefaultBodyLimit, FromRequestParts};
+use axum::http::{HeaderValue, Method, header, request::Parts};
+use axum::routing::{get, post};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -42,7 +42,14 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { open_registration: false, trust_proxy: false, max_upload_bytes: 5 << 30, url_ttl_secs: crate::security::signed_url::DEFAULT_TTL_SECS, cors_origins: vec![], login_attempts_per_minute: 10 }
+        Self {
+            open_registration: false,
+            trust_proxy: false,
+            max_upload_bytes: 5 << 30,
+            url_ttl_secs: crate::security::signed_url::DEFAULT_TTL_SECS,
+            cors_origins: vec![],
+            login_attempts_per_minute: 10,
+        }
     }
 }
 
@@ -53,7 +60,9 @@ pub struct Limiter {
 
 impl Limiter {
     pub fn new() -> Self {
-        Self { map: Mutex::new(HashMap::new()) }
+        Self {
+            map: Mutex::new(HashMap::new()),
+        }
     }
     /// Returns false once `key` has been hit `max` times within `window`.
     pub fn allow(&self, key: &str, max: u32, window: Duration) -> bool {
@@ -91,7 +100,12 @@ pub struct Peer(pub Option<std::net::SocketAddr>);
 impl<S: Send + Sync> FromRequestParts<S> for Peer {
     type Rejection = std::convert::Infallible;
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        Ok(Peer(parts.extensions.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0)))
+        Ok(Peer(
+            parts
+                .extensions
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|c| c.0),
+        ))
     }
 }
 
@@ -101,13 +115,25 @@ pub struct Caller(pub Principal);
 impl FromRequestParts<AppState> for Caller {
     type Rejection = ApiError;
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let bearer = parts.headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer "))).map(str::trim);
+        let bearer = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| {
+                v.strip_prefix("Bearer ")
+                    .or_else(|| v.strip_prefix("bearer "))
+            })
+            .map(str::trim);
         let auth = state.auth.clone();
         let b = bearer.map(str::to_string);
-        let p = tokio::task::spawn_blocking(move || auth.authenticate(b.as_deref())).await.map_err(|_| ApiError::internal("authentication task failed"))?;
+        let p = tokio::task::spawn_blocking(move || auth.authenticate(b.as_deref()))
+            .await
+            .map_err(|_| ApiError::internal("authentication task failed"))?;
         match p {
             Ok(p) => Ok(Caller(p)),
-            Err(_) => Err(ApiError::unauthorized("the API key or session is invalid or has expired")),
+            Err(_) => Err(ApiError::unauthorized(
+                "the API key or session is invalid or has expired",
+            )),
         }
     }
 }
@@ -129,7 +155,13 @@ pub enum Gate {
 }
 
 impl Gate {
-    pub fn allows(&self, who: &Principal, a: Action, record: Option<&Record>, body: Option<&Value>) -> bool {
+    pub fn allows(
+        &self,
+        who: &Principal,
+        a: Action,
+        record: Option<&Record>,
+        body: Option<&Value>,
+    ) -> bool {
         match self {
             Gate::Open => true,
             Gate::Rule(e) => {
@@ -140,21 +172,32 @@ impl Gate {
                     Action::Update => "PATCH",
                     Action::Delete => "DELETE",
                 };
-                e.matches(&Ctx { record, auth: auth.as_ref(), body, method })
+                e.matches(&Ctx {
+                    record,
+                    auth: auth.as_ref(),
+                    body,
+                    method,
+                })
             }
         }
     }
 }
 
 fn forbidden(who: &Principal, why: String) -> ApiError {
-    if matches!(who, Principal::Anonymous) { ApiError::unauthorized(&why) } else { ApiError::forbidden(&why) }
+    if matches!(who, Principal::Anonymous) {
+        ApiError::unauthorized(&why)
+    } else {
+        ApiError::forbidden(&why)
+    }
 }
 
 /// Applies, in order, the API key's scope, the administrator bypass, and the collection's rule for the action. An action with no rule is locked for everyone but administrators;
 /// an empty rule is the explicit way to make it public. Fails fast when no record or body could possibly satisfy it.
 pub fn gate(who: &Principal, def: &CollectionDef, a: Action) -> Result<Gate, ApiError> {
     if !who.scope_allows(&def.name, a) {
-        return Err(ApiError::forbidden("this API key is not allowed to do that on this collection"));
+        return Err(ApiError::forbidden(
+            "this API key is not allowed to do that on this collection",
+        ));
     }
     if who.is_admin() {
         return Ok(Gate::Open);
@@ -168,11 +211,24 @@ pub fn gate(who: &Principal, def: &CollectionDef, a: Action) -> Result<Gate, Api
 }
 
 /// `gate` plus the rule evaluated against `record` and `body`.
-pub fn authorize(who: &Principal, def: &CollectionDef, a: Action, record: Option<&Record>, body: Option<&Value>) -> Result<(), ApiError> {
+pub fn authorize(
+    who: &Principal,
+    def: &CollectionDef,
+    a: Action,
+    record: Option<&Record>,
+    body: Option<&Value>,
+) -> Result<(), ApiError> {
     if gate(who, def, a)?.allows(who, a, record, body) {
         Ok(())
     } else {
-        Err(forbidden(who, format!("the rule for {} on \"{}\" does not allow this", format!("{a:?}").to_lowercase(), def.name)))
+        Err(forbidden(
+            who,
+            format!(
+                "the rule for {} on \"{}\" does not allow this",
+                format!("{a:?}").to_lowercase(),
+                def.name
+            ),
+        ))
     }
 }
 
@@ -184,10 +240,21 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/refresh", post(authn::refresh))
         .route("/auth/me", get(authn::me))
         .route("/auth/password", post(authn::password))
-        .route("/collections", get(admin::list_collections).post(admin::create_collection))
-        .route("/collections/{name}", get(admin::get_collection).patch(admin::update_collection).delete(admin::drop_collection))
+        .route(
+            "/collections",
+            get(admin::list_collections).post(admin::create_collection),
+        )
+        .route(
+            "/collections/{name}",
+            get(admin::get_collection)
+                .patch(admin::update_collection)
+                .delete(admin::drop_collection),
+        )
         .route("/collections/{name}/records", get(records::list))
-        .route("/collections/{name}/records/{id}", get(records::get).delete(records::delete))
+        .route(
+            "/collections/{name}/records/{id}",
+            get(records::get).delete(records::delete),
+        )
         .route("/files/{collection}/{id}/{field}", get(files::download))
         .route("/keys", get(admin::list_keys).post(admin::create_key))
         .route("/keys/{id}", axum::routing::delete(admin::revoke_key))
@@ -197,25 +264,60 @@ pub fn router(state: AppState) -> Router {
         .route("/maintenance/gc", post(admin::gc))
         // JSON bodies are small; uploads stream and enforce their own limits per field
         .layer(DefaultBodyLimit::max(1 << 20));
-    let upload_routes = Router::new().route("/collections/{name}/records", post(records::create)).route("/collections/{name}/records/{id}", axum::routing::patch(records::update)).layer(DefaultBodyLimit::disable());
+    let upload_routes = Router::new()
+        .route("/collections/{name}/records", post(records::create))
+        .route(
+            "/collections/{name}/records/{id}",
+            axum::routing::patch(records::update),
+        )
+        .layer(DefaultBodyLimit::disable());
 
-    let mut app = Router::new().nest("/api/v1", api.merge(upload_routes)).fallback(ui::serve).with_state(state.clone());
+    let mut app = Router::new()
+        .nest("/api/v1", api.merge(upload_routes))
+        .fallback(ui::serve)
+        .with_state(state.clone());
     app = app
-        .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
-        .layer(SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
-        .layer(SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("x-frame-options"), HeaderValue::from_static("DENY")));
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ));
     if !state.cfg.cors_origins.is_empty() {
-        let origins: Vec<HeaderValue> = state.cfg.cors_origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
-        app = app.layer(CorsLayer::new().allow_origin(origins).allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE]).allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]).max_age(Duration::from_secs(600)));
+        let origins: Vec<HeaderValue> = state
+            .cfg
+            .cors_origins
+            .iter()
+            .filter_map(|o| HeaderValue::from_str(o).ok())
+            .collect();
+        app = app.layer(
+            CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                .max_age(Duration::from_secs(600)),
+        );
     }
     app
 }
 
-pub fn client_ip(headers: &axum::http::HeaderMap, peer: Option<std::net::SocketAddr>, trust_proxy: bool) -> String {
+pub fn client_ip(
+    headers: &axum::http::HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+    trust_proxy: bool,
+) -> String {
     if trust_proxy
         && let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
-            && let Some(first) = v.split(',').next() {
-                return first.trim().to_string();
-            }
-    peer.map(|p| p.ip().to_string()).unwrap_or_else(|| "unknown".into())
+        && let Some(first) = v.split(',').next()
+    {
+        return first.trim().to_string();
+    }
+    peer.map(|p| p.ip().to_string())
+        .unwrap_or_else(|| "unknown".into())
 }

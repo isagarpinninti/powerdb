@@ -32,14 +32,22 @@ pub struct Initialized {
 /// Creates a new data directory: the settings file, the server secret, and a first administrator (from POWERDB_ADMIN_EMAIL / POWERDB_ADMIN_PASSWORD, else a key).
 pub fn init(dir: &Path) -> Result<Initialized> {
     if !is_empty_dir(dir)? {
-        return Err(Error::Conflict(format!("{} is not empty; choose a new directory (init never touches an existing database)", dir.display())));
+        return Err(Error::Conflict(format!(
+            "{} is not empty; choose a new directory (init never touches an existing database)",
+            dir.display()
+        )));
     }
     std::fs::create_dir_all(dir)?;
     let config_path = dir.join(FILE_NAME);
     std::fs::write(&config_path, TEMPLATE)?;
-    let (state, boot) = server::build_state(dir, Options::default(), crate::api::Config::default())?;
+    let (state, boot) =
+        server::build_state(dir, Options::default(), crate::api::Config::default())?;
     state.db.flush()?;
-    Ok(Initialized { admin_key: boot.admin_key, admin_user: boot.admin_user, config_path })
+    Ok(Initialized {
+        admin_key: boot.admin_key,
+        admin_user: boot.admin_user,
+        config_path,
+    })
 }
 
 #[derive(Serialize, Deserialize)]
@@ -131,30 +139,59 @@ pub fn backup(data: &Path, dest: &Path, include_secret: bool) -> Result<BackupRe
         copy_file(&data.join(r), &dest.join(r))?;
         let (size, blake3) = hash_file(&dest.join(r))?;
         bytes += size;
-        files.push(BackupFile { path: r.to_string_lossy().replace('\\', "/"), size, blake3 });
+        files.push(BackupFile {
+            path: r.to_string_lossy().replace('\\', "/"),
+            size,
+            blake3,
+        });
     }
-    let manifest = BackupManifest { powerdb_version: env!("CARGO_PKG_VERSION").into(), created_at: now_ms(), includes_secret: include_secret && secret_present, files };
+    let manifest = BackupManifest {
+        powerdb_version: env!("CARGO_PKG_VERSION").into(),
+        created_at: now_ms(),
+        includes_secret: include_secret && secret_present,
+        files,
+    };
     let mut f = std::fs::File::create(dest.join("BACKUP.json"))?;
     f.write_all(serde_json::to_string_pretty(&manifest)?.as_bytes())?;
     f.sync_all()?;
-    Ok(BackupReport { files: manifest.files.len(), bytes, includes_secret: manifest.includes_secret })
+    Ok(BackupReport {
+        files: manifest.files.len(),
+        bytes,
+        includes_secret: manifest.includes_secret,
+    })
 }
 
 /// Restores a backup into an empty directory, checking every file against the manifest before and the database's own structure after.
 pub fn restore(from: &Path, data: &Path) -> Result<BackupReport> {
     if !is_empty_dir(data)? {
-        return Err(Error::Conflict(format!("{} is not empty; restore only into a new directory", data.display())));
+        return Err(Error::Conflict(format!(
+            "{} is not empty; restore only into a new directory",
+            data.display()
+        )));
     }
-    let manifest: BackupManifest = serde_json::from_slice(&std::fs::read(from.join("BACKUP.json")).map_err(|e| Error::Invalid(format!("{} is not a PowerDB backup (no BACKUP.json): {e}", from.display())))?)?;
+    let manifest: BackupManifest =
+        serde_json::from_slice(&std::fs::read(from.join("BACKUP.json")).map_err(|e| {
+            Error::Invalid(format!(
+                "{} is not a PowerDB backup (no BACKUP.json): {e}",
+                from.display()
+            ))
+        })?)?;
     let mut bytes = 0;
     for f in &manifest.files {
-        if f.path.split('/').any(|c| c == ".." || c.is_empty()) || Path::new(&f.path).is_absolute() {
-            return Err(Error::Corrupt(format!("the backup lists an unsafe path: {}", f.path)));
+        if f.path.split('/').any(|c| c == ".." || c.is_empty()) || Path::new(&f.path).is_absolute()
+        {
+            return Err(Error::Corrupt(format!(
+                "the backup lists an unsafe path: {}",
+                f.path
+            )));
         }
         let p = from.join(&f.path);
         let (size, h) = hash_file(&p).map_err(|e| Error::Corrupt(format!("{}: {e}", f.path)))?;
         if size != f.size || h != f.blake3 {
-            return Err(Error::Corrupt(format!("{} does not match the backup's checksum; the backup is damaged", f.path)));
+            return Err(Error::Corrupt(format!(
+                "{} does not match the backup's checksum; the backup is damaged",
+                f.path
+            )));
         }
     }
     std::fs::create_dir_all(data)?;
@@ -166,22 +203,39 @@ pub fn restore(from: &Path, data: &Path) -> Result<BackupReport> {
     let db = Db::open(data, Options::default())?;
     let report = db.verify(false)?;
     if !report.problems.is_empty() {
-        return Err(Error::Corrupt(format!("the restored database fails its integrity check: {}", report.problems.join("; "))));
+        return Err(Error::Corrupt(format!(
+            "the restored database fails its integrity check: {}",
+            report.problems.join("; ")
+        )));
     }
-    Ok(BackupReport { files: manifest.files.len(), bytes, includes_secret: manifest.includes_secret })
+    Ok(BackupReport {
+        files: manifest.files.len(),
+        bytes,
+        includes_secret: manifest.includes_secret,
+    })
 }
 
 /// Asks a running server whether it is up, using a plain HTTP request (no client library needed).
 pub fn status(addr: SocketAddr) -> Result<String> {
-    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(|e| Error::Io(std::io::Error::new(e.kind(), format!("cannot reach {addr}: {e}"))))?;
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            e.kind(),
+            format!("cannot reach {addr}: {e}"),
+        ))
+    })?;
     s.set_read_timeout(Some(Duration::from_secs(3)))?;
-    s.write_all(format!("GET /api/v1/healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes())?;
+    s.write_all(
+        format!("GET /api/v1/healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+    )?;
     let mut resp = String::new();
     s.read_to_string(&mut resp)?;
     let line = resp.lines().next().unwrap_or("");
     if line.contains(" 200 ") && resp.trim_end().ends_with("ok") {
         Ok(format!("PowerDB is running at http://{addr}"))
     } else {
-        Err(Error::Invalid(format!("something answered at {addr}, but it is not a healthy PowerDB: {line}")))
+        Err(Error::Invalid(format!(
+            "something answered at {addr}, but it is not a healthy PowerDB: {line}"
+        )))
     }
 }

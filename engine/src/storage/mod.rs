@@ -67,7 +67,13 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { durability: Durability::Commit, segment_bytes: 256 << 20, chunk: ChunkSizes::default(), verify_reads: true, cache_bytes: None }
+        Self {
+            durability: Durability::Commit,
+            segment_bytes: 256 << 20,
+            chunk: ChunkSizes::default(),
+            verify_reads: true,
+            cache_bytes: None,
+        }
     }
 }
 
@@ -120,7 +126,9 @@ pub(crate) fn rec_key(collection: &str, id: &str) -> Vec<u8> {
 }
 
 pub(crate) fn u64_of(v: Option<fjall::Slice>) -> u64 {
-    v.and_then(|s| s.as_ref().try_into().ok()).map(u64::from_le_bytes).unwrap_or(0)
+    v.and_then(|s| s.as_ref().try_into().ok())
+        .map(u64::from_le_bytes)
+        .unwrap_or(0)
 }
 
 /// File bytes that have been chunked, hashed and written to the log but are not yet part of any record. Dropping it without committing leaves only
@@ -139,7 +147,12 @@ impl PendingFile {
         self.manifest.size
     }
     pub fn file_ref(&self) -> FileRef {
-        FileRef { id: hex(&self.file_id), size: self.manifest.size, mime: self.mime.clone(), name: self.name.clone() }
+        FileRef {
+            id: hex(&self.file_id),
+            size: self.manifest.size,
+            mime: self.mime.clone(),
+            name: self.name.clone(),
+        }
     }
     /// Bytes this file added to the log (chunks not already stored).
     pub fn new_bytes(&self) -> u64 {
@@ -196,11 +209,26 @@ impl Db {
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
         // Two processes on one data directory would corrupt it, so the first one holds an exclusive lock and any other is refused.
-        let lock = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path.join("LOCK"))?;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path.join("LOCK"))?;
         match lock.try_lock() {
             Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Conflict(format!("{} is in use by another PowerDB process (or backup); stop it first", path.display()))),
-            Err(std::fs::TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Unsupported => tracing::warn!("this file system does not support locking; make sure only one PowerDB process uses {}", path.display()),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(Error::Conflict(format!(
+                    "{} is in use by another PowerDB process (or backup); stop it first",
+                    path.display()
+                )));
+            }
+            Err(std::fs::TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Unsupported => {
+                tracing::warn!(
+                    "this file system does not support locking; make sure only one PowerDB process uses {}",
+                    path.display()
+                )
+            }
             Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
         let mut b = Database::builder(path.join("meta"));
@@ -223,37 +251,66 @@ impl Db {
         let next_seq = match ks.gc_queue.last_key_value() {
             Some(g) => {
                 let (k, _) = g.into_inner()?;
-                u64::from_be_bytes(k.as_ref().try_into().map_err(|_| Error::Corrupt("gc queue key".into()))?) + 1
+                u64::from_be_bytes(
+                    k.as_ref()
+                        .try_into()
+                        .map_err(|_| Error::Corrupt("gc queue key".into()))?,
+                ) + 1
             }
             None => 0,
         };
         let mut codecs: HashMap<u8, Arc<dyn ChunkCodec>> = HashMap::new();
         codecs.insert(0, Arc::new(PlainCodec));
-        let interval = if let Durability::Interval(ms) = opts.durability { Some(ms.max(1)) } else { None };
+        let interval = if let Durability::Interval(ms) = opts.durability {
+            Some(ms.max(1))
+        } else {
+            None
+        };
         let db = Db {
-            inner: Arc::new(Inner { _lock: lock, store, ks, log, opts, commit: Mutex::new(()), codecs: RwLock::new(codecs), pins: Mutex::new(HashMap::new()), gc_seq: AtomicU64::new(next_seq) }),
+            inner: Arc::new(Inner {
+                _lock: lock,
+                store,
+                ks,
+                log,
+                opts,
+                commit: Mutex::new(()),
+                codecs: RwLock::new(codecs),
+                pins: Mutex::new(HashMap::new()),
+                gc_seq: AtomicU64::new(next_seq),
+            }),
         };
         if let Some(ms) = interval {
             // Holds only a weak reference, so the thread ends by itself once the database is dropped.
             let weak = Arc::downgrade(&db.inner);
-            std::thread::Builder::new().name("powerdb-fsync".into()).spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(ms));
-                let Some(i) = weak.upgrade() else { break };
-                let _ = i.log.sync();
-                let _ = i.store.persist(PersistMode::SyncAll);
-            })?;
+            std::thread::Builder::new()
+                .name("powerdb-fsync".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                        let Some(i) = weak.upgrade() else { break };
+                        let _ = i.log.sync();
+                        let _ = i.store.persist(PersistMode::SyncAll);
+                    }
+                })?;
         }
         Ok(db)
     }
 
     /// Another keyspace in the same database, for modules (accounts, keys) that keep their own records beside the collections.
     pub fn keyspace(&self, name: &str) -> Result<Keyspace> {
-        Ok(self.inner.store.keyspace(name, KeyspaceCreateOptions::default)?)
+        Ok(self
+            .inner
+            .store
+            .keyspace(name, KeyspaceCreateOptions::default)?)
     }
 
     /// Registers the codec used for encrypted collections (and for decoding any chunk it wrote).
     pub fn register_codec(&self, codec: Arc<dyn ChunkCodec>) {
-        self.inner.codecs.write().unwrap_or_else(|e| e.into_inner()).insert(codec.flags(), codec);
+        self.inner
+            .codecs
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(codec.flags(), codec);
     }
 
     fn codec_by_flags(&self, flags: u8) -> Result<Arc<dyn ChunkCodec>> {
@@ -265,11 +322,22 @@ impl Db {
     pub fn create_collection(&self, mut def: CollectionDef) -> Result<CollectionDef> {
         def.check_name()?;
         let _g = self.inner.commit.lock().unwrap_or_else(|e| e.into_inner());
-        if self.inner.ks.collections.contains_key(def.name.as_bytes())? {
-            return Err(Error::Conflict(format!("collection \"{}\" already exists", def.name)));
+        if self
+            .inner
+            .ks
+            .collections
+            .contains_key(def.name.as_bytes())?
+        {
+            return Err(Error::Conflict(format!(
+                "collection \"{}\" already exists",
+                def.name
+            )));
         }
         def.created_at = now_ms();
-        self.inner.ks.collections.insert(def.name.as_bytes().to_vec(), serde_json::to_vec(&def)?)?;
+        self.inner
+            .ks
+            .collections
+            .insert(def.name.as_bytes().to_vec(), serde_json::to_vec(&def)?)?;
         self.persist()?;
         Ok(def)
     }
@@ -282,7 +350,10 @@ impl Db {
             return Err(Error::Invalid("a collection's encryption cannot change after it is created (existing files keep the codec that wrote them)".into()));
         }
         def.created_at = old.created_at;
-        self.inner.ks.collections.insert(def.name.as_bytes().to_vec(), serde_json::to_vec(&def)?)?;
+        self.inner
+            .ks
+            .collections
+            .insert(def.name.as_bytes().to_vec(), serde_json::to_vec(&def)?)?;
         self.persist()?;
         Ok(def)
     }
@@ -322,11 +393,24 @@ impl Db {
     // ---- staging files ----
 
     /// Reads `reader` to the end, writing new chunks to the log. Safe to run on many threads at once.
-    pub fn stage_file(&self, collection: &str, mime: &str, name: Option<&str>, reader: impl Read) -> Result<PendingFile> {
+    pub fn stage_file(
+        &self,
+        collection: &str,
+        mime: &str,
+        name: Option<&str>,
+        reader: impl Read,
+    ) -> Result<PendingFile> {
         let def = self.collection(collection)?;
-        let codec = if def.encrypt { self.codec_by_flags(1)? } else { self.codec_by_flags(0)? };
+        let codec = if def.encrypt {
+            self.codec_by_flags(1)?
+        } else {
+            self.codec_by_flags(0)?
+        };
         let flags = codec.flags();
-        let mut guard = PinGuard { inner: self.inner.clone(), keys: Vec::new() };
+        let mut guard = PinGuard {
+            inner: self.inner.clone(),
+            keys: Vec::new(),
+        };
         let mut chunks: Vec<([u8; 32], u32)> = Vec::new();
         let mut new_ptrs: HashMap<[u8; 32], ChunkPtr> = HashMap::new();
         let mut size = 0u64;
@@ -341,7 +425,10 @@ impl Db {
                 continue;
             }
             let stored = codec.encode(&key, &data)?;
-            let ptr = self.inner.log.append(&key, data.len() as u32, flags, &stored)?;
+            let ptr = self
+                .inner
+                .log
+                .append(&key, data.len() as u32, flags, &stored)?;
             new_ptrs.insert(key, ptr);
         }
         if self.inner.opts.durability == Durability::Commit && !new_ptrs.is_empty() {
@@ -349,14 +436,37 @@ impl Db {
         }
         let manifest = Manifest { size, chunks };
         let file_id = manifest.file_id();
-        Ok(PendingFile { manifest, file_id, mime: mime.to_string(), name: name.map(str::to_string), new_ptrs, guard })
+        Ok(PendingFile {
+            manifest,
+            file_id,
+            mime: mime.to_string(),
+            name: name.map(str::to_string),
+            new_ptrs,
+            guard,
+        })
     }
 
     // ---- records ----
 
-    pub fn create(&self, collection: &str, fields: Map<String, Value>, files: Vec<(String, PendingFile)>) -> Result<Record> {
+    pub fn create(
+        &self,
+        collection: &str,
+        fields: Map<String, Value>,
+        files: Vec<(String, PendingFile)>,
+    ) -> Result<Record> {
         let def = self.collection(collection)?;
-        let attached: BTreeMap<String, AttachedFile<'_>> = files.iter().map(|(k, p)| (k.clone(), AttachedFile { size: p.size(), mime: &p.mime })).collect();
+        let attached: BTreeMap<String, AttachedFile<'_>> = files
+            .iter()
+            .map(|(k, p)| {
+                (
+                    k.clone(),
+                    AttachedFile {
+                        size: p.size(),
+                        mime: &p.mime,
+                    },
+                )
+            })
+            .collect();
         def.validate(&fields, &attached, false)?;
         let now = now_ms();
         let rec = Record {
@@ -365,7 +475,10 @@ impl Db {
             created_at: now,
             updated_at: now,
             fields,
-            files: files.iter().map(|(k, p)| (k.clone(), p.file_ref())).collect(),
+            files: files
+                .iter()
+                .map(|(k, p)| (k.clone(), p.file_ref()))
+                .collect(),
         };
         let pend: Vec<&PendingFile> = files.iter().map(|(_, p)| p).collect();
         self.commit_change(None, Some(&rec), &pend)?;
@@ -380,9 +493,18 @@ impl Db {
     }
 
     /// Merges `patch` into the record's fields (a JSON null removes a field), attaches `files` (replacing any file in the same field) and detaches `remove_files`.
-    pub fn update(&self, collection: &str, id: &str, patch: Map<String, Value>, files: Vec<(String, PendingFile)>, remove_files: &[String]) -> Result<Record> {
+    pub fn update(
+        &self,
+        collection: &str,
+        id: &str,
+        patch: Map<String, Value>,
+        files: Vec<(String, PendingFile)>,
+        remove_files: &[String],
+    ) -> Result<Record> {
         let def = self.collection(collection)?;
-        let old = self.get(collection, id)?.ok_or_else(|| Error::NotFound(format!("record {id} in \"{collection}\"")))?;
+        let old = self
+            .get(collection, id)?
+            .ok_or_else(|| Error::NotFound(format!("record {id} in \"{collection}\"")))?;
         let mut fields = old.fields.clone();
         for (k, v) in &patch {
             if v.is_null() {
@@ -399,9 +521,27 @@ impl Db {
             frefs.insert(k.clone(), p.file_ref());
         }
         // Validate the whole resulting record: the fields as merged and the files as they will be.
-        let attached: BTreeMap<String, AttachedFile<'_>> = frefs.iter().map(|(k, f)| (k.clone(), AttachedFile { size: f.size, mime: &f.mime })).collect();
+        let attached: BTreeMap<String, AttachedFile<'_>> = frefs
+            .iter()
+            .map(|(k, f)| {
+                (
+                    k.clone(),
+                    AttachedFile {
+                        size: f.size,
+                        mime: &f.mime,
+                    },
+                )
+            })
+            .collect();
         def.validate(&fields, &attached, false)?;
-        let rec = Record { id: old.id.clone(), collection: old.collection.clone(), created_at: old.created_at, updated_at: now_ms().max(old.updated_at), fields, files: frefs };
+        let rec = Record {
+            id: old.id.clone(),
+            collection: old.collection.clone(),
+            created_at: old.created_at,
+            updated_at: now_ms().max(old.updated_at),
+            fields,
+            files: frefs,
+        };
         let pend: Vec<&PendingFile> = files.iter().map(|(_, p)| p).collect();
         self.commit_change(Some(&old), Some(&rec), &pend)?;
         Ok(rec)
@@ -418,7 +558,12 @@ impl Db {
     }
 
     /// Visits records in id order (oldest first) or reverse (newest first) until `f` returns false.
-    pub fn scan(&self, collection: &str, newest_first: bool, mut f: impl FnMut(Record) -> Result<bool>) -> Result<()> {
+    pub fn scan(
+        &self,
+        collection: &str,
+        newest_first: bool,
+        mut f: impl FnMut(Record) -> Result<bool>,
+    ) -> Result<()> {
         let mut prefix = collection.as_bytes().to_vec();
         prefix.push(0);
         let it = self.inner.ks.records.prefix(&prefix);
@@ -463,13 +608,20 @@ impl Db {
     }
 
     /// Applies a record change (create, update or delete) together with every reference-count and index change it implies, as one atomic batch.
-    fn commit_change(&self, old: Option<&Record>, new: Option<&Record>, pend: &[&PendingFile]) -> Result<()> {
+    fn commit_change(
+        &self,
+        old: Option<&Record>,
+        new: Option<&Record>,
+        pend: &[&PendingFile],
+    ) -> Result<()> {
         let ks = &self.inner.ks;
         let _g = self.inner.commit.lock().unwrap_or_else(|e| e.into_inner());
         let mut batch = self.inner.store.batch();
 
         let mut file_delta: HashMap<[u8; 32], i64> = HashMap::new();
-        let id_of = |f: &FileRef| from_hex_32(&f.id).ok_or_else(|| Error::Corrupt(format!("bad file id {}", f.id)));
+        let id_of = |f: &FileRef| {
+            from_hex_32(&f.id).ok_or_else(|| Error::Corrupt(format!("bad file id {}", f.id)))
+        };
         if let Some(o) = old {
             for f in o.files.values() {
                 *file_delta.entry(id_of(f)?).or_default() -= 1;
@@ -495,11 +647,19 @@ impl Db {
             let cur = u64_of(ks.file_refs.get(fid)?) as i64;
             let next = cur + d;
             if next < 0 {
-                return Err(Error::Corrupt("a file's reference count would go negative".into()));
+                return Err(Error::Corrupt(
+                    "a file's reference count would go negative".into(),
+                ));
             }
-            batch.insert(&ks.file_refs, fid.to_vec(), (next as u64).to_le_bytes().to_vec());
+            batch.insert(
+                &ks.file_refs,
+                fid.to_vec(),
+                (next as u64).to_le_bytes().to_vec(),
+            );
             if cur == 0 && next > 0 && !ks.files.contains_key(fid)? {
-                let p = pend.iter().find(|p| &p.file_id == fid).ok_or_else(|| Error::Corrupt("a record refers to a file that was not staged".into()))?;
+                let p = pend.iter().find(|p| &p.file_id == fid).ok_or_else(|| {
+                    Error::Corrupt("a record refers to a file that was not staged".into())
+                })?;
                 batch.insert(&ks.files, fid.to_vec(), p.manifest.to_bytes());
                 for k in p.manifest.unique_keys() {
                     *chunk_delta.entry(k).or_default() += 1;
@@ -519,24 +679,39 @@ impl Db {
                 Some(v) => {
                     if cur == 0 && next > 0 {
                         // a chunk that was counted dead is alive again
-                        let p = ChunkPtr::from_bytes(&v).ok_or_else(|| Error::Corrupt("chunk pointer".into()))?;
+                        let p = ChunkPtr::from_bytes(&v)
+                            .ok_or_else(|| Error::Corrupt("chunk pointer".into()))?;
                         *dead_delta.entry(p.seg).or_default() -= p.entry_len() as i64;
                     }
                 }
                 None => {
-                    let p = new_ptrs.get(k).ok_or_else(|| Error::Corrupt("a chunk is neither indexed nor staged".into()))?;
+                    let p = new_ptrs.get(k).ok_or_else(|| {
+                        Error::Corrupt("a chunk is neither indexed nor staged".into())
+                    })?;
                     batch.insert(&ks.chunks, k.to_vec(), p.to_bytes().to_vec());
                 }
             }
-            batch.insert(&ks.chunk_refs, k.to_vec(), (next as u64).to_le_bytes().to_vec());
+            batch.insert(
+                &ks.chunk_refs,
+                k.to_vec(),
+                (next as u64).to_le_bytes().to_vec(),
+            );
         }
         for (seg, d) in dead_delta {
             let cur = u64_of(ks.seg_dead.get(seg.to_be_bytes())?);
-            batch.insert(&ks.seg_dead, seg.to_be_bytes().to_vec(), (cur as i64 + d).max(0).to_le_bytes().to_vec());
+            batch.insert(
+                &ks.seg_dead,
+                seg.to_be_bytes().to_vec(),
+                (cur as i64 + d).max(0).to_le_bytes().to_vec(),
+            );
         }
 
         match (old, new) {
-            (_, Some(n)) => batch.insert(&ks.records, rec_key(&n.collection, &n.id), serde_json::to_vec(n)?),
+            (_, Some(n)) => batch.insert(
+                &ks.records,
+                rec_key(&n.collection, &n.id),
+                serde_json::to_vec(n)?,
+            ),
             (Some(o), None) => batch.remove(&ks.records, rec_key(&o.collection, &o.id)),
             (None, None) => {}
         }
@@ -547,14 +722,22 @@ impl Db {
     // ---- reading files ----
 
     pub fn manifest(&self, file_id: &[u8; 32]) -> Result<Manifest> {
-        let v = self.inner.ks.files.get(file_id)?.ok_or_else(|| Error::NotFound("file".into()))?;
+        let v = self
+            .inner
+            .ks
+            .files
+            .get(file_id)?
+            .ok_or_else(|| Error::NotFound("file".into()))?;
         Manifest::from_bytes(&v).ok_or_else(|| Error::Corrupt("file manifest".into()))
     }
 
     fn read_chunk_range(&self, key: &[u8; 32], from: u32, to: u32) -> Result<Vec<u8>> {
         for attempt in 0..3 {
-            let v = self.inner.ks.chunks.get(key)?.ok_or_else(|| Error::Corrupt("a file refers to a chunk that is not stored".into()))?;
-            let ptr = ChunkPtr::from_bytes(&v).ok_or_else(|| Error::Corrupt("chunk pointer".into()))?;
+            let v = self.inner.ks.chunks.get(key)?.ok_or_else(|| {
+                Error::Corrupt("a file refers to a chunk that is not stored".into())
+            })?;
+            let ptr =
+                ChunkPtr::from_bytes(&v).ok_or_else(|| Error::Corrupt("chunk pointer".into()))?;
             let r = (|| -> Result<Vec<u8>> {
                 if ptr.flags == 0 && !(from == 0 && to == ptr.raw_len) {
                     return self.inner.log.read_slice(&ptr, from, to - from); // an unencrypted chunk can be read in part
@@ -564,14 +747,21 @@ impl Db {
                 if raw.len() != ptr.raw_len as usize {
                     return Err(Error::Corrupt("chunk length".into()));
                 }
-                if ptr.flags == 0 && self.inner.opts.verify_reads && blake3::hash(&raw).as_bytes() != key {
-                    return Err(Error::Corrupt("a chunk's contents no longer match its hash".into()));
+                if ptr.flags == 0
+                    && self.inner.opts.verify_reads
+                    && blake3::hash(&raw).as_bytes() != key
+                {
+                    return Err(Error::Corrupt(
+                        "a chunk's contents no longer match its hash".into(),
+                    ));
                 }
                 Ok(raw[from as usize..to as usize].to_vec())
             })();
             match r {
                 // compaction may have moved and deleted the segment between the lookup and the read: look the pointer up again
-                Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound && attempt < 2 => continue,
+                Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound && attempt < 2 => {
+                    continue;
+                }
                 other => return other,
             }
         }
@@ -579,7 +769,13 @@ impl Db {
     }
 
     /// Streams bytes `start..end` of a file to `sink`, one piece per chunk touched.
-    pub fn read_file_range(&self, m: &Manifest, start: u64, end: u64, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+    pub fn read_file_range(
+        &self,
+        m: &Manifest,
+        start: u64,
+        end: u64,
+        sink: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
         let end = end.min(m.size);
         let mut off = 0u64;
         for (key, len) in &m.chunks {
@@ -619,7 +815,12 @@ impl Db {
             g.key()?;
             pending += 1;
         }
-        Ok(Stats { segments: self.inner.log.segment_ids()?.len(), log_bytes: self.inner.log.total_bytes()?, dead_bytes: dead, gc_pending: pending })
+        Ok(Stats {
+            segments: self.inner.log.segment_ids()?.len(),
+            log_bytes: self.inner.log.total_bytes()?,
+            dead_bytes: dead,
+            gc_pending: pending,
+        })
     }
 
     /// Flushes everything to disk regardless of the `sync` option.

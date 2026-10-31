@@ -4,8 +4,8 @@
 
 use crate::error::{Error, Result};
 use crate::security::secrets::Secrets;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
@@ -19,11 +19,14 @@ pub struct UrlSigner {
 
 impl UrlSigner {
     pub fn new(secrets: &Secrets) -> Self {
-        Self { key: secrets.derive("signed urls") }
+        Self {
+            key: secrets.derive("signed urls"),
+        }
     }
 
     fn mac(&self, scope: &str, exp: i64) -> HmacSha256 {
-        let mut m = <HmacSha256 as KeyInit>::new_from_slice(&self.key).expect("HMAC accepts any key length");
+        let mut m = <HmacSha256 as KeyInit>::new_from_slice(&self.key)
+            .expect("HMAC accepts any key length");
         m.update(b"powerdb-url-v1\0");
         m.update(scope.as_bytes());
         m.update(&[0]);
@@ -47,7 +50,9 @@ impl UrlSigner {
         }
         let exp = i64::from_be_bytes(raw[0..8].try_into().map_err(|_| denied())?);
         // Check the MAC first and in constant time, then the clock: an attacker learns nothing about either from timing.
-        self.mac(scope, exp).verify_slice(&raw[8..]).map_err(|_| denied())?;
+        self.mac(scope, exp)
+            .verify_slice(&raw[8..])
+            .map_err(|_| denied())?;
         if now_unix > exp {
             return Err(denied());
         }

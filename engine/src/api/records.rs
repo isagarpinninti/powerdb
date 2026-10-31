@@ -1,17 +1,22 @@
 use super::query::{self, ListQuery};
 use super::upload::{self, Upload};
-use super::{authorize, gate, AppState, ApiError, Caller, Gate};
+use super::{ApiError, AppState, Caller, Gate, authorize, gate};
 use crate::auth::{Action, Principal};
 use crate::model::{CollectionDef, Record};
 use crate::util::now_ms;
-use axum::extract::{FromRequest, Multipart, Path, Query, Request, State};
-use axum::http::{header, StatusCode};
 use axum::Json;
-use serde_json::{json, Map, Value};
+use axum::extract::{FromRequest, Multipart, Path, Query, Request, State};
+use axum::http::{StatusCode, header};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, crate::Error> + Send + 'static) -> Result<T, ApiError> {
-    tokio::task::spawn_blocking(f).await.map_err(|_| ApiError::internal("task failed"))?.map_err(ApiError::from)
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, crate::Error> + Send + 'static,
+) -> Result<T, ApiError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|_| ApiError::internal("task failed"))?
+        .map_err(ApiError::from)
 }
 
 async fn collection(st: &AppState, name: &str) -> Result<CollectionDef, ApiError> {
@@ -22,7 +27,13 @@ async fn collection(st: &AppState, name: &str) -> Result<CollectionDef, ApiError
 
 /// A record as the client sees it: system fields and the record's own fields side by side, and for each file its metadata plus, when the caller may view the
 /// record, a link that works for `url_ttl_secs`.
-pub fn render(st: &AppState, who: &Principal, def: &CollectionDef, view: &Gate, r: &Record) -> Value {
+pub fn render(
+    st: &AppState,
+    who: &Principal,
+    def: &CollectionDef,
+    view: &Gate,
+    r: &Record,
+) -> Value {
     let mut m = Map::new();
     m.insert("id".into(), json!(r.id));
     m.insert("collection".into(), json!(r.collection));
@@ -37,8 +48,13 @@ pub fn render(st: &AppState, who: &Principal, def: &CollectionDef, view: &Gate, 
         for (field, f) in &r.files {
             let mut o = json!({"name": f.name, "size": f.size, "mime": f.mime});
             if can_view {
-                let token = st.signer.sign(&format!("{}/{}/{}/{}", def.name, r.id, field, f.id), exp);
-                o["url"] = json!(format!("/api/v1/files/{}/{}/{}?token={}", def.name, r.id, field, token));
+                let token = st
+                    .signer
+                    .sign(&format!("{}/{}/{}/{}", def.name, r.id, field, f.id), exp);
+                o["url"] = json!(format!(
+                    "/api/v1/files/{}/{}/{}?token={}",
+                    def.name, r.id, field, token
+                ));
             }
             m.insert(field.clone(), o);
         }
@@ -48,10 +64,17 @@ pub fn render(st: &AppState, who: &Principal, def: &CollectionDef, view: &Gate, 
 
 fn view_gate(who: &Principal, def: &CollectionDef) -> Gate {
     // a caller who cannot view gets records without links; the list/get rule decides whether they see the record at all
-    gate(who, def, Action::View).unwrap_or(Gate::Rule(crate::security::expr::Expr::Lit(Value::Bool(false))))
+    gate(who, def, Action::View).unwrap_or(Gate::Rule(crate::security::expr::Expr::Lit(
+        Value::Bool(false),
+    )))
 }
 
-pub async fn list(State(st): State<AppState>, Caller(who): Caller, Path(name): Path<String>, Query(params): Query<HashMap<String, String>>) -> Result<Json<Value>, ApiError> {
+pub async fn list(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+    Path(name): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, ApiError> {
     let def = collection(&st, &name).await?;
     let g = gate(&who, &def, Action::List)?;
     // a rule that never looks at the record is one yes-or-no for this caller: say no now (401 for an anonymous caller) instead of returning an empty list
@@ -113,54 +136,117 @@ pub async fn list(State(st): State<AppState>, Caller(who): Caller, Path(name): P
     Ok(Json(body))
 }
 
-pub async fn get(State(st): State<AppState>, Caller(who): Caller, Path((name, id)): Path<(String, String)>) -> Result<Json<Value>, ApiError> {
+pub async fn get(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+    Path((name, id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
     let def = collection(&st, &name).await?;
     let db = st.db.clone();
     let (n, i) = (name.clone(), id.clone());
-    let rec = blocking(move || db.get(&n, &i)).await?.ok_or_else(|| ApiError::not_found(&format!("record {id}")))?;
+    let rec = blocking(move || db.get(&n, &i))
+        .await?
+        .ok_or_else(|| ApiError::not_found(&format!("record {id}")))?;
     authorize(&who, &def, Action::View, Some(&rec), None)?;
     let vg = view_gate(&who, &def);
     Ok(Json(render(&st, &who, &def, &vg, &rec)))
 }
 
-async fn read_input(st: &AppState, def: &CollectionDef, req: Request, check: impl Fn(&Map<String, Value>) -> Result<(), ApiError>) -> Result<Upload, ApiError> {
-    let ct = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
+async fn read_input(
+    st: &AppState,
+    def: &CollectionDef,
+    req: Request,
+    check: impl Fn(&Map<String, Value>) -> Result<(), ApiError>,
+) -> Result<Upload, ApiError> {
+    let ct = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if ct.starts_with("multipart/form-data") {
-        let mp = Multipart::from_request(req, st).await.map_err(|e| ApiError::bad_request(&format!("bad multipart request: {}", e.body_text())))?;
+        let mp = Multipart::from_request(req, st).await.map_err(|e| {
+            ApiError::bad_request(&format!("bad multipart request: {}", e.body_text()))
+        })?;
         return upload::read_multipart(st, def, mp, check).await;
     }
     if !ct.is_empty() && !ct.starts_with("application/json") {
-        return Err(ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid", "send application/json, or multipart/form-data with a \"data\" part"));
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid",
+            "send application/json, or multipart/form-data with a \"data\" part",
+        ));
     }
-    let bytes = axum::body::to_bytes(req.into_body(), 1 << 20).await.map_err(|_| ApiError::too_large("a JSON body is limited to 1 MiB; send files as multipart/form-data"))?;
+    let bytes = axum::body::to_bytes(req.into_body(), 1 << 20)
+        .await
+        .map_err(|_| {
+            ApiError::too_large(
+                "a JSON body is limited to 1 MiB; send files as multipart/form-data",
+            )
+        })?;
     let (fields, remove) = upload::split_body(upload::parse_json_object(&bytes)?)?;
     check(&fields)?;
-    Ok(Upload { fields, files: vec![], remove })
+    Ok(Upload {
+        fields,
+        files: vec![],
+        remove,
+    })
 }
 
-pub async fn create(State(st): State<AppState>, Caller(who): Caller, Path(name): Path<String>, req: Request) -> Result<(StatusCode, Json<Value>), ApiError> {
+pub async fn create(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+    Path(name): Path<String>,
+    req: Request,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     let def = collection(&st, &name).await?;
     let g = gate(&who, &def, Action::Create)?; // refuses at once, before reading a byte, when nobody is allowed to create
     let up = read_input(&st, &def, req, |fields| {
         let body = Value::Object(fields.clone());
-        if g.allows(&who, Action::Create, None, Some(&body)) { Ok(()) } else { Err(super::authorize(&who, &def, Action::Create, None, Some(&body)).err().unwrap_or_else(|| ApiError::forbidden("not allowed"))) }
+        if g.allows(&who, Action::Create, None, Some(&body)) {
+            Ok(())
+        } else {
+            Err(
+                super::authorize(&who, &def, Action::Create, None, Some(&body))
+                    .err()
+                    .unwrap_or_else(|| ApiError::forbidden("not allowed")),
+            )
+        }
     })
     .await?;
     let (db, n) = (st.db.clone(), name.clone());
     let rec = blocking(move || db.create(&n, up.fields, up.files)).await?;
     let vg = view_gate(&who, &def);
-    Ok((StatusCode::CREATED, Json(render(&st, &who, &def, &vg, &rec))))
+    Ok((
+        StatusCode::CREATED,
+        Json(render(&st, &who, &def, &vg, &rec)),
+    ))
 }
 
-pub async fn update(State(st): State<AppState>, Caller(who): Caller, Path((name, id)): Path<(String, String)>, req: Request) -> Result<Json<Value>, ApiError> {
+pub async fn update(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+    Path((name, id)): Path<(String, String)>,
+    req: Request,
+) -> Result<Json<Value>, ApiError> {
     let def = collection(&st, &name).await?;
     let g = gate(&who, &def, Action::Update)?;
     let db = st.db.clone();
     let (n, i) = (name.clone(), id.clone());
-    let old = blocking(move || db.get(&n, &i)).await?.ok_or_else(|| ApiError::not_found(&format!("record {id}")))?;
+    let old = blocking(move || db.get(&n, &i))
+        .await?
+        .ok_or_else(|| ApiError::not_found(&format!("record {id}")))?;
     let up = read_input(&st, &def, req, |fields| {
         let body = Value::Object(fields.clone());
-        if g.allows(&who, Action::Update, Some(&old), Some(&body)) { Ok(()) } else { Err(super::authorize(&who, &def, Action::Update, Some(&old), Some(&body)).err().unwrap_or_else(|| ApiError::forbidden("not allowed"))) }
+        if g.allows(&who, Action::Update, Some(&old), Some(&body)) {
+            Ok(())
+        } else {
+            Err(
+                super::authorize(&who, &def, Action::Update, Some(&old), Some(&body))
+                    .err()
+                    .unwrap_or_else(|| ApiError::forbidden("not allowed")),
+            )
+        }
     })
     .await?;
     let (db, n, i) = (st.db.clone(), name.clone(), old.id.clone());
@@ -169,11 +255,17 @@ pub async fn update(State(st): State<AppState>, Caller(who): Caller, Path((name,
     Ok(Json(render(&st, &who, &def, &vg, &rec)))
 }
 
-pub async fn delete(State(st): State<AppState>, Caller(who): Caller, Path((name, id)): Path<(String, String)>) -> Result<StatusCode, ApiError> {
+pub async fn delete(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+    Path((name, id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
     let def = collection(&st, &name).await?;
     let db = st.db.clone();
     let (n, i) = (name.clone(), id.clone());
-    let rec = blocking(move || db.get(&n, &i)).await?.ok_or_else(|| ApiError::not_found(&format!("record {id}")))?;
+    let rec = blocking(move || db.get(&n, &i))
+        .await?
+        .ok_or_else(|| ApiError::not_found(&format!("record {id}")))?;
     authorize(&who, &def, Action::Delete, Some(&rec), None)?;
     let db = st.db.clone();
     blocking(move || db.delete(&name, &id)).await?;

@@ -17,7 +17,9 @@ pub struct ChaChaCodec {
 impl ChaChaCodec {
     pub fn new(secrets: &Secrets) -> Self {
         let key = secrets.derive("chunk encryption");
-        Self { cipher: ChaCha20Poly1305::new(&Key::from(key)) }
+        Self {
+            cipher: ChaCha20Poly1305::new(&Key::from(key)),
+        }
     }
 }
 
@@ -27,7 +29,10 @@ impl ChunkCodec for ChaChaCodec {
     }
     fn encode(&self, key: &[u8; 32], raw: &[u8]) -> Result<Vec<u8>> {
         let nonce: [u8; 12] = random_bytes();
-        let ct = self.cipher.encrypt(&Nonce::from(nonce), Payload { msg: raw, aad: key }).map_err(|_| Error::Corrupt("encryption failed".into()))?;
+        let ct = self
+            .cipher
+            .encrypt(&Nonce::from(nonce), Payload { msg: raw, aad: key })
+            .map_err(|_| Error::Corrupt("encryption failed".into()))?;
         let mut out = Vec::with_capacity(12 + ct.len());
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&ct);
@@ -35,10 +40,21 @@ impl ChunkCodec for ChaChaCodec {
     }
     fn decode(&self, key: &[u8; 32], stored: &[u8]) -> Result<Vec<u8>> {
         if stored.len() < 12 + 16 {
-            return Err(Error::Corrupt("an encrypted chunk is shorter than its nonce and tag".into()));
+            return Err(Error::Corrupt(
+                "an encrypted chunk is shorter than its nonce and tag".into(),
+            ));
         }
         let (nonce, ct) = stored.split_at(12);
-        let nonce: [u8; 12] = nonce.try_into().map_err(|_| Error::Corrupt("nonce".into()))?;
-        self.cipher.decrypt(&Nonce::from(nonce), Payload { msg: ct, aad: key }).map_err(|_| Error::Corrupt("an encrypted chunk failed authentication: wrong key, or the data was altered".into()))
+        let nonce: [u8; 12] = nonce
+            .try_into()
+            .map_err(|_| Error::Corrupt("nonce".into()))?;
+        self.cipher
+            .decrypt(&Nonce::from(nonce), Payload { msg: ct, aad: key })
+            .map_err(|_| {
+                Error::Corrupt(
+                    "an encrypted chunk failed authentication: wrong key, or the data was altered"
+                        .into(),
+                )
+            })
     }
 }

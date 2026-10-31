@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde_json::json;
 
 /// An error as the client sees it:  {"error": {"code": "...", "message": "..."}}  Internal failures are logged in full and reported without detail.
@@ -13,7 +13,11 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
-        Self { status, code, message: message.into() }
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
     }
     pub fn bad_request(m: &str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid", m)
@@ -56,8 +60,15 @@ impl From<crate::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let mut r = (self.status, Json(json!({"error": {"code": self.code, "message": self.message}}))).into_response();
-        r.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+        let mut r = (
+            self.status,
+            Json(json!({"error": {"code": self.code, "message": self.message}})),
+        )
+            .into_response();
+        r.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
         r
     }
 }

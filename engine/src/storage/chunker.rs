@@ -14,7 +14,11 @@ pub struct ChunkSizes {
 
 impl Default for ChunkSizes {
     fn default() -> Self {
-        Self { min: 256 << 10, avg: 1 << 20, max: 4 << 20 }
+        Self {
+            min: 256 << 10,
+            avg: 1 << 20,
+            max: 4 << 20,
+        }
     }
 }
 
@@ -24,7 +28,9 @@ pub struct Chunker<R: Read> {
 
 impl<R: Read> Chunker<R> {
     pub fn new(r: R, s: ChunkSizes) -> Self {
-        Self { inner: StreamCDC::new(r, s.min, s.avg, s.max) }
+        Self {
+            inner: StreamCDC::new(r, s.min, s.avg, s.max),
+        }
     }
 }
 

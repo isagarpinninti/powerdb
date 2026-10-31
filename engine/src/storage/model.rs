@@ -86,7 +86,11 @@ pub const RESERVED_FIELDS: [&str; 4] = ["id", "collection", "created_at", "updat
 
 pub fn valid_name(n: &str) -> bool {
     let b = n.as_bytes();
-    !b.is_empty() && b.len() <= 63 && b[0].is_ascii_lowercase() && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
+    !b.is_empty()
+        && b.len() <= 63
+        && b[0].is_ascii_lowercase()
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
 }
 
 fn mime_allowed(allowed: &[String], mime: &str) -> bool {
@@ -106,25 +110,42 @@ pub struct AttachedFile<'a> {
 impl CollectionDef {
     pub fn check_name(&self) -> Result<()> {
         if !valid_name(&self.name) {
-            return Err(Error::Invalid(format!("collection name \"{}\" must be lowercase letters, digits and underscores, starting with a letter (at most 63)", self.name)));
+            return Err(Error::Invalid(format!(
+                "collection name \"{}\" must be lowercase letters, digits and underscores, starting with a letter (at most 63)",
+                self.name
+            )));
         }
         let mut seen = std::collections::HashSet::new();
         for f in &self.fields {
             if !valid_name(&f.name) || RESERVED_FIELDS.contains(&f.name.as_str()) {
-                return Err(Error::Invalid(format!("field name \"{}\" is not allowed", f.name)));
+                return Err(Error::Invalid(format!(
+                    "field name \"{}\" is not allowed",
+                    f.name
+                )));
             }
             if !seen.insert(&f.name) {
-                return Err(Error::Invalid(format!("field \"{}\" is declared twice", f.name)));
+                return Err(Error::Invalid(format!(
+                    "field \"{}\" is declared twice",
+                    f.name
+                )));
             }
         }
         Ok(())
     }
 
     /// Checks field values and file attachments against the schema. With `partial` (an update) required fields may be absent.
-    pub fn validate(&self, fields: &Map<String, Value>, files: &BTreeMap<String, AttachedFile<'_>>, partial: bool) -> Result<()> {
+    pub fn validate(
+        &self,
+        fields: &Map<String, Value>,
+        files: &BTreeMap<String, AttachedFile<'_>>,
+        partial: bool,
+    ) -> Result<()> {
         for k in fields.keys().chain(files.keys()) {
             if !self.fields.iter().any(|f| &f.name == k) {
-                return Err(Error::Invalid(format!("collection \"{}\" has no field \"{k}\"", self.name)));
+                return Err(Error::Invalid(format!(
+                    "collection \"{}\" has no field \"{k}\"",
+                    self.name
+                )));
             }
         }
         for f in &self.fields {
@@ -132,25 +153,45 @@ impl CollectionDef {
             let file = files.get(&f.name);
             if f.kind == FieldKind::File {
                 if v.is_some() {
-                    return Err(Error::Invalid(format!("\"{}\" is a file field: send the file itself, not a value", f.name)));
+                    return Err(Error::Invalid(format!(
+                        "\"{}\" is a file field: send the file itself, not a value",
+                        f.name
+                    )));
                 }
                 match file {
-                    None if f.required && !partial => return Err(Error::Invalid(format!("file field \"{}\" is required", f.name))),
+                    None if f.required && !partial => {
+                        return Err(Error::Invalid(format!(
+                            "file field \"{}\" is required",
+                            f.name
+                        )));
+                    }
                     None => {}
                     Some(a) => {
                         if let Some(max) = f.max
-                            && a.size > max {
-                                return Err(Error::Invalid(format!("\"{}\" is {} bytes; the limit is {max}", f.name, a.size)));
-                            }
+                            && a.size > max
+                        {
+                            return Err(Error::Invalid(format!(
+                                "\"{}\" is {} bytes; the limit is {max}",
+                                f.name, a.size
+                            )));
+                        }
                         if !mime_allowed(&f.mime, a.mime) {
-                            return Err(Error::Invalid(format!("\"{}\" is {}; allowed: {}", f.name, a.mime, f.mime.join(", "))));
+                            return Err(Error::Invalid(format!(
+                                "\"{}\" is {}; allowed: {}",
+                                f.name,
+                                a.mime,
+                                f.mime.join(", ")
+                            )));
                         }
                     }
                 }
                 continue;
             }
             if file.is_some() {
-                return Err(Error::Invalid(format!("\"{}\" is not a file field", f.name)));
+                return Err(Error::Invalid(format!(
+                    "\"{}\" is not a file field",
+                    f.name
+                )));
             }
             match v {
                 None | Some(Value::Null) => {
@@ -161,14 +202,30 @@ impl CollectionDef {
                 Some(v) => {
                     let ok = match f.kind {
                         // a required text field means something was written: the empty string does not count
-                        FieldKind::Text | FieldKind::Relation => v.as_str().is_some_and(|s| f.max.is_none_or(|m| s.len() as u64 <= m) && !(f.required && s.trim().is_empty())),
+                        FieldKind::Text | FieldKind::Relation => v.as_str().is_some_and(|s| {
+                            f.max.is_none_or(|m| s.len() as u64 <= m)
+                                && !(f.required && s.trim().is_empty())
+                        }),
                         FieldKind::Number => v.is_number(),
                         FieldKind::Bool => v.is_boolean(),
                         FieldKind::Json => true,
                         FieldKind::File => unreachable!(),
                     };
                     if !ok {
-                        return Err(Error::Invalid(format!("field \"{}\" must be {:?}{}{}", f.name, f.kind, f.max.map(|m| format!(" (at most {m} bytes)")).unwrap_or_default(), if f.required && matches!(f.kind, FieldKind::Text | FieldKind::Relation) { " and not empty" } else { "" })));
+                        return Err(Error::Invalid(format!(
+                            "field \"{}\" must be {:?}{}{}",
+                            f.name,
+                            f.kind,
+                            f.max
+                                .map(|m| format!(" (at most {m} bytes)"))
+                                .unwrap_or_default(),
+                            if f.required && matches!(f.kind, FieldKind::Text | FieldKind::Relation)
+                            {
+                                " and not empty"
+                            } else {
+                                ""
+                            }
+                        )));
                     }
                 }
             }
@@ -207,7 +264,10 @@ impl Manifest {
         let chunks = (0..n)
             .map(|i| {
                 let o = 12 + i * 36;
-                (b[o..o + 32].try_into().unwrap_or([0; 32]), u32::from_le_bytes(b[o + 32..o + 36].try_into().unwrap_or([0; 4])))
+                (
+                    b[o..o + 32].try_into().unwrap_or([0; 32]),
+                    u32::from_le_bytes(b[o + 32..o + 36].try_into().unwrap_or([0; 4])),
+                )
             })
             .collect();
         Some(Self { size, chunks })

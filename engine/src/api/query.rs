@@ -28,10 +28,17 @@ fn known(def: &CollectionDef, name: &str) -> bool {
 fn check_paths(e: &Expr, def: &CollectionDef) -> Result<(), ApiError> {
     match e {
         Expr::Path { at: false, parts } => {
-            let head = if parts.first().map(String::as_str) == Some("record") { parts.get(1) } else { parts.first() };
+            let head = if parts.first().map(String::as_str) == Some("record") {
+                parts.get(1)
+            } else {
+                parts.first()
+            };
             match head {
                 Some(h) if known(def, h) => Ok(()),
-                Some(h) => Err(ApiError::bad_request(&format!("filter: collection \"{}\" has no field \"{h}\"", def.name))),
+                Some(h) => Err(ApiError::bad_request(&format!(
+                    "filter: collection \"{}\" has no field \"{h}\"",
+                    def.name
+                ))),
                 None => Ok(()),
             }
         }
@@ -45,7 +52,11 @@ fn check_paths(e: &Expr, def: &CollectionDef) -> Result<(), ApiError> {
 }
 
 pub fn parse(params: &HashMap<String, String>, def: &CollectionDef) -> Result<ListQuery, ApiError> {
-    let filter = match params.get("filter").map(|f| f.trim()).filter(|f| !f.is_empty()) {
+    let filter = match params
+        .get("filter")
+        .map(|f| f.trim())
+        .filter(|f| !f.is_empty())
+    {
         Some(f) => {
             let e = expr::parse(f).map_err(|e| ApiError::bad_request(&e.to_string()))?;
             check_paths(&e, def)?;
@@ -61,7 +72,10 @@ pub fn parse(params: &HashMap<String, String>, def: &CollectionDef) -> Result<Li
                 None => (false, part.strip_prefix('+').unwrap_or(part)),
             };
             if !known(def, name) {
-                return Err(ApiError::bad_request(&format!("sort: collection \"{}\" has no field \"{name}\"", def.name)));
+                return Err(ApiError::bad_request(&format!(
+                    "sort: collection \"{}\" has no field \"{name}\"",
+                    def.name
+                )));
             }
             sort.push((name.to_string(), desc));
         }
@@ -72,14 +86,23 @@ pub fn parse(params: &HashMap<String, String>, def: &CollectionDef) -> Result<Li
     let num = |k: &str, d: usize| -> Result<usize, ApiError> {
         match params.get(k) {
             None => Ok(d),
-            Some(v) => v.parse::<usize>().map_err(|_| ApiError::bad_request(&format!("{k} must be a whole number"))),
+            Some(v) => v
+                .parse::<usize>()
+                .map_err(|_| ApiError::bad_request(&format!("{k} must be a whole number"))),
         }
     };
     let limit = num("limit", DEFAULT_LIMIT)?;
     if limit == 0 || limit > MAX_LIMIT {
-        return Err(ApiError::bad_request(&format!("limit must be between 1 and {MAX_LIMIT}")));
+        return Err(ApiError::bad_request(&format!(
+            "limit must be between 1 and {MAX_LIMIT}"
+        )));
     }
-    Ok(ListQuery { filter, sort, limit, offset: num("offset", 0)? })
+    Ok(ListQuery {
+        filter,
+        sort,
+        limit,
+        offset: num("offset", 0)?,
+    })
 }
 
 impl ListQuery {
@@ -108,8 +131,14 @@ fn cmp_values(a: &Value, b: &Value) -> Ordering {
         (Value::Null, Value::Null) => Ordering::Equal,
         (Value::Null, _) => Ordering::Greater, // missing values sort last, whichever the direction
         (_, Value::Null) => Ordering::Less,
-        (Value::Number(x), Value::Number(y)) => x.as_f64().partial_cmp(&y.as_f64()).unwrap_or(Ordering::Equal),
-        (Value::String(x), Value::String(y)) => x.to_lowercase().cmp(&y.to_lowercase()).then_with(|| x.cmp(y)),
+        (Value::Number(x), Value::Number(y)) => x
+            .as_f64()
+            .partial_cmp(&y.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (Value::String(x), Value::String(y)) => x
+            .to_lowercase()
+            .cmp(&y.to_lowercase())
+            .then_with(|| x.cmp(y)),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         _ => a.to_string().cmp(&b.to_string()),
     }
@@ -119,7 +148,13 @@ pub fn compare(a: &Record, b: &Record, sort: &[(String, bool)]) -> Ordering {
     for (name, desc) in sort {
         let (x, y) = (field(a, name), field(b, name));
         let o = cmp_values(&x, &y);
-        let o = if x.is_null() || y.is_null() { o } else if *desc { o.reverse() } else { o };
+        let o = if x.is_null() || y.is_null() {
+            o
+        } else if *desc {
+            o.reverse()
+        } else {
+            o
+        };
         if o != Ordering::Equal {
             return o;
         }

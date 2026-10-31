@@ -4,7 +4,7 @@
 //! 1. `gc_step` releases files whose counter reached zero: it decrements their chunks' counters and marks the bytes of chunks that hit zero as dead.
 //! 2. `compact` rewrites a sealed segment whose dead share is high: live chunks are copied forward, the index is repointed in one atomic batch, and the old file is deleted.
 
-use super::{segment::ChunkPtr, u64_of, Db};
+use super::{Db, segment::ChunkPtr, u64_of};
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 
@@ -37,7 +37,10 @@ impl Db {
             }
             let (qk, fid) = g.into_inner()?;
             batch.remove(&ks.gc_queue, qk.to_vec());
-            let fid: [u8; 32] = fid.as_ref().try_into().map_err(|_| Error::Corrupt("gc queue entry".into()))?;
+            let fid: [u8; 32] = fid
+                .as_ref()
+                .try_into()
+                .map_err(|_| Error::Corrupt("gc queue entry".into()))?;
             if u64_of(ks.file_refs.get(fid)?) > 0 {
                 continue; // a new record took the same file before we got here
             }
@@ -45,7 +48,8 @@ impl Db {
                 batch.remove(&ks.file_refs, fid.to_vec());
                 continue;
             };
-            let m = super::model::Manifest::from_bytes(&mv).ok_or_else(|| Error::Corrupt("file manifest".into()))?;
+            let m = super::model::Manifest::from_bytes(&mv)
+                .ok_or_else(|| Error::Corrupt("file manifest".into()))?;
             for k in m.unique_keys() {
                 let cur = match chunk_refs.get(&k) {
                     Some(c) => *c,
@@ -55,12 +59,14 @@ impl Db {
                 chunk_refs.insert(k, next);
                 batch.insert(&ks.chunk_refs, k.to_vec(), next.to_le_bytes().to_vec());
                 if next == 0
-                    && let Some(v) = ks.chunks.get(k)? {
-                        let p = ChunkPtr::from_bytes(&v).ok_or_else(|| Error::Corrupt("chunk pointer".into()))?;
-                        *dead.entry(p.seg).or_default() += p.entry_len();
-                        stats.chunks_dead += 1;
-                        stats.bytes_dead += p.entry_len();
-                    }
+                    && let Some(v) = ks.chunks.get(k)?
+                {
+                    let p = ChunkPtr::from_bytes(&v)
+                        .ok_or_else(|| Error::Corrupt("chunk pointer".into()))?;
+                    *dead.entry(p.seg).or_default() += p.entry_len();
+                    stats.chunks_dead += 1;
+                    stats.bytes_dead += p.entry_len();
+                }
             }
             batch.remove(&ks.files, fid.to_vec());
             batch.remove(&ks.file_refs, fid.to_vec());
@@ -68,14 +74,22 @@ impl Db {
         }
         for (seg, add) in dead {
             let cur = u64_of(ks.seg_dead.get(seg.to_be_bytes())?);
-            batch.insert(&ks.seg_dead, seg.to_be_bytes().to_vec(), (cur + add).to_le_bytes().to_vec());
+            batch.insert(
+                &ks.seg_dead,
+                seg.to_be_bytes().to_vec(),
+                (cur + add).to_le_bytes().to_vec(),
+            );
         }
         batch.commit()?;
         Ok(stats)
     }
 
     fn is_pinned(&self, key: &[u8; 32]) -> bool {
-        self.inner.pins.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key)
+        self.inner
+            .pins
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(key)
     }
 
     /// Compacts every sealed segment whose dead bytes are at least `min_dead_ratio` of its size (0.0 compacts all sealed segments).
@@ -108,9 +122,10 @@ impl Db {
         let mut indexed: Vec<([u8; 32], ChunkPtr)> = Vec::new();
         log.scan(seg, |e| {
             if let Some(v) = ks.chunks.get(e.key)?
-                && ChunkPtr::from_bytes(&v) == Some(e.ptr) {
-                    indexed.push((e.key, e.ptr));
-                }
+                && ChunkPtr::from_bytes(&v) == Some(e.ptr)
+            {
+                indexed.push((e.key, e.ptr));
+            }
             Ok(())
         })?;
         let mut moved: HashMap<[u8; 32], ChunkPtr> = HashMap::new();
@@ -132,7 +147,8 @@ impl Db {
             let _g = self.inner.commit.lock().unwrap_or_else(|e| e.into_inner());
             let mut batch = self.inner.store.batch();
             for (key, ptr) in &indexed {
-                let still_here = ks.chunks.get(key)?.and_then(|v| ChunkPtr::from_bytes(&v)) == Some(*ptr);
+                let still_here =
+                    ks.chunks.get(key)?.and_then(|v| ChunkPtr::from_bytes(&v)) == Some(*ptr);
                 if !still_here {
                     continue;
                 }
@@ -159,7 +175,11 @@ impl Db {
             }
         }
         log.remove_segment(seg)?;
-        Ok(CompactStats { segments_compacted: 1, bytes_reclaimed: seg_len.saturating_sub(copied), bytes_copied: copied })
+        Ok(CompactStats {
+            segments_compacted: 1,
+            bytes_reclaimed: seg_len.saturating_sub(copied),
+            bytes_copied: copied,
+        })
     }
 
     /// Drains the release queue and compacts segments that are at least `min_dead_ratio` dead. What a maintenance thread would run when the server is idle.

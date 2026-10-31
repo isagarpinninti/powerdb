@@ -5,7 +5,12 @@
 //!
 //! A miscounted reference is the dangerous kind of bug (it ends in deleting data that is still in use), so (3) rebuilds the counts independently and compares.
 
-use super::{model::{Manifest, Record}, segment::ChunkPtr, u64_of, Db};
+use super::{
+    Db,
+    model::{Manifest, Record},
+    segment::ChunkPtr,
+    u64_of,
+};
 use crate::error::{Error, Result};
 use crate::util::{from_hex_32, hex};
 use std::collections::HashMap;
@@ -38,17 +43,27 @@ impl Db {
         let mut file_uses: HashMap<[u8; 32], u64> = HashMap::new();
         for g in ks.records.iter() {
             let (_, v) = g.into_inner()?;
-            let rec: Record = serde_json::from_slice(&v).map_err(|e| Error::Corrupt(format!("a record does not decode: {e}")))?;
+            let rec: Record = serde_json::from_slice(&v)
+                .map_err(|e| Error::Corrupt(format!("a record does not decode: {e}")))?;
             r.records += 1;
             for (field, f) in &rec.files {
                 match from_hex_32(&f.id) {
                     Some(id) => {
                         *file_uses.entry(id).or_default() += 1;
                         if !ks.files.contains_key(id)? {
-                            note(&mut r, format!("record {} field {field}: its file {} is missing", rec.id, f.id));
+                            note(
+                                &mut r,
+                                format!(
+                                    "record {} field {field}: its file {} is missing",
+                                    rec.id, f.id
+                                ),
+                            );
                         }
                     }
-                    None => note(&mut r, format!("record {} field {field}: bad file id", rec.id)),
+                    None => note(
+                        &mut r,
+                        format!("record {} field {field}: bad file id", rec.id),
+                    ),
                 }
             }
         }
@@ -58,40 +73,75 @@ impl Db {
         for g in ks.files.iter() {
             let (k, v) = g.into_inner()?;
             r.files += 1;
-            let id: [u8; 32] = k.as_ref().try_into().map_err(|_| Error::Corrupt("a file key".into()))?;
+            let id: [u8; 32] = k
+                .as_ref()
+                .try_into()
+                .map_err(|_| Error::Corrupt("a file key".into()))?;
             let Some(m) = Manifest::from_bytes(&v) else {
-                note(&mut r, format!("file {}: its manifest does not decode", hex(&id)));
+                note(
+                    &mut r,
+                    format!("file {}: its manifest does not decode", hex(&id)),
+                );
                 continue;
             };
             if m.chunks.iter().map(|(_, l)| *l as u64).sum::<u64>() != m.size {
-                note(&mut r, format!("file {}: its chunks do not add up to its size", hex(&id)));
+                note(
+                    &mut r,
+                    format!("file {}: its chunks do not add up to its size", hex(&id)),
+                );
             }
             if m.file_id() != id {
-                note(&mut r, format!("file {}: its manifest does not hash to its id", hex(&id)));
+                note(
+                    &mut r,
+                    format!("file {}: its manifest does not hash to its id", hex(&id)),
+                );
             }
             for k in m.unique_keys() {
                 *chunk_uses.entry(k).or_default() += 1;
                 if !ks.chunks.contains_key(k)? {
-                    note(&mut r, format!("file {}: chunk {} is missing from the index", hex(&id), hex(&k)));
+                    note(
+                        &mut r,
+                        format!(
+                            "file {}: chunk {} is missing from the index",
+                            hex(&id),
+                            hex(&k)
+                        ),
+                    );
                 }
             }
             // a file's counter is the number of records using it; zero is fine while it waits in the release queue
             let stored = u64_of(ks.file_refs.get(id)?);
             let actual = file_uses.get(&id).copied().unwrap_or(0);
             if stored != actual {
-                note(&mut r, format!("file {}: counted {stored} records using it, but {actual} do", hex(&id)));
+                note(
+                    &mut r,
+                    format!(
+                        "file {}: counted {stored} records using it, but {actual} do",
+                        hex(&id)
+                    ),
+                );
             }
         }
         // the chunks: counters, then (optionally) contents
         for g in ks.chunks.iter() {
             let (k, v) = g.into_inner()?;
             r.chunks += 1;
-            let key: [u8; 32] = k.as_ref().try_into().map_err(|_| Error::Corrupt("a chunk key".into()))?;
-            let ptr = ChunkPtr::from_bytes(&v).ok_or_else(|| Error::Corrupt("a chunk pointer".into()))?;
+            let key: [u8; 32] = k
+                .as_ref()
+                .try_into()
+                .map_err(|_| Error::Corrupt("a chunk key".into()))?;
+            let ptr =
+                ChunkPtr::from_bytes(&v).ok_or_else(|| Error::Corrupt("a chunk pointer".into()))?;
             let stored = u64_of(ks.chunk_refs.get(key)?);
             let actual = chunk_uses.get(&key).copied().unwrap_or(0);
             if stored != actual {
-                note(&mut r, format!("chunk {}: counted {stored} files using it, but {actual} do", hex(&key)));
+                note(
+                    &mut r,
+                    format!(
+                        "chunk {}: counted {stored} files using it, but {actual} do",
+                        hex(&key)
+                    ),
+                );
             }
             if content {
                 match self.read_chunk_range(&key, 0, ptr.raw_len) {
