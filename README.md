@@ -27,3 +27,6 @@ Access is locked by default: a collection with no rule for an action can be used
 `powerdb serve` serves the dashboard on the same port as the API. Sign in with the admin key printed on first start, or with an administrator account. The theme uses the same tokens as the hypout project (neutral zinc surfaces, amber only as an accent, dark by default, light on request or when the OS asks for it). To rebuild it: `cd dashboard && npm run build`, then `cargo build --release` (the compiled assets live in `engine/ui` and are embedded).
 
 Known gaps: PDFs show a labelled tile rather than a rendered thumbnail (that needs a PDF renderer); OAuth2 sign-in (Google, GitHub) is not implemented; there are no automated browser tests for the dashboard.
+
+## Install and operate
+See [docs/INSTALL.md](docs/INSTALL.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md). Packaging (Docker, systemd, launchd, Windows task, install scripts) and CI/release workflows are written but unverified outside macOS arm64 until CI runs.

@@ -1,0 +1,23 @@
+# PowerDB behind Caddy, which obtains and renews a TLS certificate.
+# Set POWERDB_DOMAIN (a DNS name pointing at this host) before `docker compose up -d`.
+services:
+  powerdb:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - powerdb-data:/data
+    environment:
+      POWERDB_TRUST_PROXY: "true"   # take the client address from Caddy's X-Forwarded-For
+    expose: ["8090"]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      POWERDB_DOMAIN: ${POWERDB_DOMAIN:?set POWERDB_DOMAIN}
+    command: caddy reverse-proxy --from ${POWERDB_DOMAIN} --to powerdb:8090
+    volumes:
+      - caddy-data:/data
+volumes:
+  powerdb-data:
+  caddy-data:
