@@ -5,6 +5,7 @@ pub mod chunker;
 pub mod gc;
 pub mod model;
 pub mod segment;
+pub mod verify;
 
 use crate::error::{Error, Result};
 use crate::util::{from_hex_32, hex, new_id, now_ms};
@@ -83,6 +84,8 @@ pub(crate) struct Spaces {
 }
 
 pub(crate) struct Inner {
+    /// Holds the data directory's exclusive lock for as long as this database is open.
+    pub _lock: std::fs::File,
     pub store: Database,
     pub ks: Spaces,
     pub log: SegmentLog,
@@ -192,6 +195,14 @@ impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
+        // Two processes on one data directory would corrupt it, so the first one holds an exclusive lock and any other is refused.
+        let lock = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path.join("LOCK"))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Conflict(format!("{} is in use by another PowerDB process (or backup); stop it first", path.display()))),
+            Err(std::fs::TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Unsupported => tracing::warn!("this file system does not support locking; make sure only one PowerDB process uses {}", path.display()),
+            Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
         let mut b = Database::builder(path.join("meta"));
         if let Some(c) = opts.cache_bytes {
             b = b.cache_size(c);
@@ -220,7 +231,7 @@ impl Db {
         codecs.insert(0, Arc::new(PlainCodec));
         let interval = if let Durability::Interval(ms) = opts.durability { Some(ms.max(1)) } else { None };
         let db = Db {
-            inner: Arc::new(Inner { store, ks, log, opts, commit: Mutex::new(()), codecs: RwLock::new(codecs), pins: Mutex::new(HashMap::new()), gc_seq: AtomicU64::new(next_seq) }),
+            inner: Arc::new(Inner { _lock: lock, store, ks, log, opts, commit: Mutex::new(()), codecs: RwLock::new(codecs), pins: Mutex::new(HashMap::new()), gc_seq: AtomicU64::new(next_seq) }),
         };
         if let Some(ms) = interval {
             // Holds only a weak reference, so the thread ends by itself once the database is dropped.

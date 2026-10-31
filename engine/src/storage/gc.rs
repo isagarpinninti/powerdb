@@ -31,12 +31,10 @@ impl Db {
         let mut stats = GcStats::default();
         let mut chunk_refs: HashMap<[u8; 32], u64> = HashMap::new();
         let mut dead: HashMap<u32, u64> = HashMap::new();
-        let mut taken = 0;
-        for g in ks.gc_queue.iter() {
+        for (taken, g) in ks.gc_queue.iter().enumerate() {
             if taken >= max_files {
                 break;
             }
-            taken += 1;
             let (qk, fid) = g.into_inner()?;
             batch.remove(&ks.gc_queue, qk.to_vec());
             let fid: [u8; 32] = fid.as_ref().try_into().map_err(|_| Error::Corrupt("gc queue entry".into()))?;
@@ -56,14 +54,13 @@ impl Db {
                 let next = cur.saturating_sub(1);
                 chunk_refs.insert(k, next);
                 batch.insert(&ks.chunk_refs, k.to_vec(), next.to_le_bytes().to_vec());
-                if next == 0 {
-                    if let Some(v) = ks.chunks.get(k)? {
+                if next == 0
+                    && let Some(v) = ks.chunks.get(k)? {
                         let p = ChunkPtr::from_bytes(&v).ok_or_else(|| Error::Corrupt("chunk pointer".into()))?;
                         *dead.entry(p.seg).or_default() += p.entry_len();
                         stats.chunks_dead += 1;
                         stats.bytes_dead += p.entry_len();
                     }
-                }
             }
             batch.remove(&ks.files, fid.to_vec());
             batch.remove(&ks.file_refs, fid.to_vec());
@@ -110,11 +107,10 @@ impl Db {
         // Phase 1, no lock: find the entries the index still points at, and copy the ones that look alive to the active segment.
         let mut indexed: Vec<([u8; 32], ChunkPtr)> = Vec::new();
         log.scan(seg, |e| {
-            if let Some(v) = ks.chunks.get(e.key)? {
-                if ChunkPtr::from_bytes(&v) == Some(e.ptr) {
+            if let Some(v) = ks.chunks.get(e.key)?
+                && ChunkPtr::from_bytes(&v) == Some(e.ptr) {
                     indexed.push((e.key, e.ptr));
                 }
-            }
             Ok(())
         })?;
         let mut moved: HashMap<[u8; 32], ChunkPtr> = HashMap::new();

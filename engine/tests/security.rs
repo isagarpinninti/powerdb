@@ -253,7 +253,10 @@ fn secrets_derive_independent_keys_and_persist() {
     let s2 = Secrets::load_or_create(&dir.0).unwrap();
     assert_eq!(s.derive("a"), s2.derive("a"));
     assert_ne!(s.derive("a"), s.derive("b"));
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(dir.0.join("secret.key")).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "the secret file is private to its owner");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.0.join("secret.key")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the secret file is private to its owner");
+    }
 }

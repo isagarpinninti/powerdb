@@ -13,7 +13,7 @@ fn pct(v: &mut [u64], p: f64) -> f64 {
     v[((v.len() as f64 * p) as usize).min(v.len() - 1)] as f64 / 1000.0
 }
 
-fn report(name: &str, lat: &mut Vec<u64>, total_s: f64) {
+fn report(name: &str, lat: &mut [u64], total_s: f64) {
     let n = lat.len();
     println!("  {name:<34} {:>9.0} ops/s   p50 {:>8.1} us   p99 {:>8.1} us   max {:>9.1} us   ({n} ops)", n as f64 / total_s, pct(lat, 0.5), pct(lat, 0.99), pct(lat, 1.0));
 }
@@ -97,9 +97,9 @@ pub fn run(args: &[String]) -> i32 {
 
     let mut lat = Vec::with_capacity(n);
     let t = Instant::now();
-    for i in 0..n {
+    for (i, id) in ids.iter().enumerate() {
         let s = Instant::now();
-        db.update("items", &ids[i], json!({"tag": "updated", "n": i + 1}).as_object().unwrap().clone(), vec![], &[]).expect("update");
+        db.update("items", id, json!({"tag": "updated", "n": i + 1}).as_object().unwrap().clone(), vec![], &[]).expect("update");
         lat.push(s.elapsed().as_nanos() as u64);
     }
     report("update (patch two fields)", &mut lat, t.elapsed().as_secs_f64());

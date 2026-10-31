@@ -66,7 +66,9 @@ async fn json(a: &App, m: Method, uri: &str, t: Option<&str>, v: Value) -> Res {
     send(a, m, uri, t, Some("application/json"), v.to_string().into_bytes(), &[]).await
 }
 
-fn multipart(parts: &[(&str, Option<(&str, &str)>, &[u8])]) -> (String, Vec<u8>) {
+type Part<'a> = (&'a str, Option<(&'a str, &'a str)>, &'a [u8]);
+
+fn multipart(parts: &[Part]) -> (String, Vec<u8>) {
     let boundary = "----pdbtest1234567890";
     let mut out = Vec::new();
     for (name, file, data) in parts {
@@ -82,7 +84,7 @@ fn multipart(parts: &[(&str, Option<(&str, &str)>, &[u8])]) -> (String, Vec<u8>)
     (format!("multipart/form-data; boundary={boundary}"), out)
 }
 
-async fn upload(a: &App, method: Method, uri: &str, t: &str, parts: &[(&str, Option<(&str, &str)>, &[u8])]) -> Res {
+async fn upload(a: &App, method: Method, uri: &str, t: &str, parts: &[Part<'_>]) -> Res {
     let (ct, body) = multipart(parts);
     send(a, method, uri, Some(t), Some(&ct), body, &[]).await
 }

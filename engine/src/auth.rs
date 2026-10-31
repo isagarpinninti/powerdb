@@ -113,12 +113,10 @@ impl Principal {
                 if !k.collections.is_empty() && !k.collections.iter().any(|c| c == collection) {
                     return false;
                 }
-                match (k.access, a) {
-                    (Access::ReadWrite, _) => true,
-                    (Access::Read, Action::List | Action::View) => true,
-                    (Access::Write, Action::Create | Action::Update | Action::Delete) => true,
-                    _ => false,
-                }
+                matches!(
+                    (k.access, a),
+                    (Access::ReadWrite, _) | (Access::Read, Action::List | Action::View) | (Access::Write, Action::Create | Action::Update | Action::Delete)
+                )
             }
             _ => true,
         }
@@ -315,7 +313,7 @@ impl Auth {
             return Err(Error::Invalid("an administrative key has full access; it cannot be limited".into()));
         }
         let secret = format!("pdb_live_{}", URL_SAFE_NO_PAD.encode(random_bytes::<32>()));
-        let meta = KeyMeta { id: format!("key_{}", &hex(&random_bytes::<8>())), name: name.trim().to_string(), access, collections, admin, created_at: now_ms() };
+        let meta = KeyMeta { id: format!("key_{}", hex(&random_bytes::<8>())), name: name.trim().to_string(), access, collections, admin, created_at: now_ms() };
         self.inner.keys.insert(Self::key_hash(&secret), serde_json::to_vec(&meta)?)?;
         Ok((secret, meta))
     }

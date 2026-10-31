@@ -24,11 +24,10 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, crate::Error>
 
 fn check_rules(def: &CollectionDef) -> Result<(), ApiError> {
     for (name, r) in [("list", &def.rules.list), ("view", &def.rules.view), ("create", &def.rules.create), ("update", &def.rules.update), ("delete", &def.rules.delete)] {
-        if let Some(r) = r {
-            if !r.trim().is_empty() {
+        if let Some(r) = r
+            && !r.trim().is_empty() {
                 expr::parse(r).map_err(|e| ApiError::bad_request(&format!("the {name} rule does not parse: {e}")))?;
             }
-        }
     }
     Ok(())
 }
@@ -130,11 +129,10 @@ pub async fn list_users(State(st): State<AppState>, Caller(who): Caller) -> Resu
 
 pub async fn delete_user(State(st): State<AppState>, Caller(who): Caller, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
     admin(&who)?;
-    if let Principal::User(u) = &who {
-        if u.id == id {
+    if let Principal::User(u) = &who
+        && u.id == id {
             return Err(ApiError::bad_request("you cannot delete the account you are signed in with"));
         }
-    }
     let auth = st.auth.clone();
     if blocking(move || auth.delete_user(&id)).await? { Ok(StatusCode::NO_CONTENT) } else { Err(ApiError::not_found("user")) }
 }

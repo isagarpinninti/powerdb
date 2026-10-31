@@ -112,7 +112,7 @@ impl FromRequestParts<AppState> for Caller {
     }
 }
 
-fn rule_of<'a>(def: &'a CollectionDef, a: Action) -> &'a Option<String> {
+fn rule_of(def: &CollectionDef, a: Action) -> &Option<String> {
     match a {
         Action::List => &def.rules.list,
         Action::View => &def.rules.view,
@@ -212,12 +212,10 @@ pub fn router(state: AppState) -> Router {
 }
 
 pub fn client_ip(headers: &axum::http::HeaderMap, peer: Option<std::net::SocketAddr>, trust_proxy: bool) -> String {
-    if trust_proxy {
-        if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            if let Some(first) = v.split(',').next() {
+    if trust_proxy
+        && let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+            && let Some(first) = v.split(',').next() {
                 return first.trim().to_string();
             }
-        }
-    }
     peer.map(|p| p.ip().to_string()).unwrap_or_else(|| "unknown".into())
 }

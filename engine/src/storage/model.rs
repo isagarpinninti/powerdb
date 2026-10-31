@@ -138,11 +138,10 @@ impl CollectionDef {
                     None if f.required && !partial => return Err(Error::Invalid(format!("file field \"{}\" is required", f.name))),
                     None => {}
                     Some(a) => {
-                        if let Some(max) = f.max {
-                            if a.size > max {
+                        if let Some(max) = f.max
+                            && a.size > max {
                                 return Err(Error::Invalid(format!("\"{}\" is {} bytes; the limit is {max}", f.name, a.size)));
                             }
-                        }
                         if !mime_allowed(&f.mime, a.mime) {
                             return Err(Error::Invalid(format!("\"{}\" is {}; allowed: {}", f.name, a.mime, f.mime.join(", "))));
                         }

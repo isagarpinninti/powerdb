@@ -45,7 +45,7 @@ pub fn spawn_maintenance(db: Db) {
             tick.tick().await;
             n += 1;
             let db = db.clone();
-            let compact = n % 30 == 0;
+            let compact = n.is_multiple_of(30);
             let r = tokio::task::spawn_blocking(move || -> Result<()> {
                 db.gc_step(128)?;
                 if compact {

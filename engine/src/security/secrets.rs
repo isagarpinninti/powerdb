@@ -18,6 +18,17 @@ impl Secrets {
         Self { master }
     }
 
+    /// Like `load_or_create` but never writes anything: None when the environment and the data directory hold no secret.
+    pub fn load_existing(dir: &Path) -> Result<Option<Self>> {
+        if std::env::var("POWERDB_SECRET").is_ok() {
+            return Self::load_or_create(dir).map(Some);
+        }
+        if dir.join("secret.key").is_file() {
+            return Self::load_or_create(dir).map(Some);
+        }
+        Ok(None)
+    }
+
     /// Reads the secret from the environment, else from `<dir>/secret.key`, else creates that file.
     pub fn load_or_create(dir: &Path) -> Result<Self> {
         if let Ok(v) = std::env::var("POWERDB_SECRET") {
@@ -31,8 +42,7 @@ impl Secrets {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let k: [u8; 32] = random_bytes();
                 use std::io::Write;
-                use std::os::unix::fs::OpenOptionsExt;
-                let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+                let mut f = crate::fileio::create_private(&path)?;
                 f.write_all(hex(&k).as_bytes())?;
                 f.sync_all()?;
                 Ok(Self { master: k })

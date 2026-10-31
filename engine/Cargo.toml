@@ -36,6 +36,7 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
 tokio-stream = "0.1.19"
 tokio-util = "0.7.20"
+toml = "1.1.8"
 tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["limit", "trace", "set-header", "compression-gzip", "cors"] }
 tracing = "0.1.44"

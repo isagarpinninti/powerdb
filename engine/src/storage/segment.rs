@@ -7,7 +7,7 @@
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::os::unix::fs::FileExt;
+use crate::fileio::{read_exact_at, write_all_at};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
@@ -100,7 +100,7 @@ fn scan_file(file: &File, seg: u32, mut visit: impl FnMut(ScannedEntry) -> Resul
     let mut off = 0u64;
     let mut h = [0u8; HEADER as usize];
     while off + HEADER <= total {
-        if file.read_exact_at(&mut h, off).is_err() {
+        if read_exact_at(file, &mut h, off).is_err() {
             break;
         }
         let Some((key, raw_len, stored_len, flags)) = parse_header(&h) else { break };
@@ -184,7 +184,7 @@ impl SegmentLog {
             *a = Active { id, file, len: 0 };
         }
         let off = a.len;
-        a.file.write_all_at(&buf, off)?;
+        write_all_at(&a.file, &buf, off)?;
         a.len += entry;
         self.sync_state.lock().unwrap_or_else(|e| e.into_inner()).appended += 1;
         Ok(ChunkPtr { seg: a.id, off, stored_len: payload.len() as u32, raw_len, flags })
@@ -230,7 +230,7 @@ impl SegmentLog {
     pub fn read_payload(&self, p: &ChunkPtr) -> Result<Vec<u8>> {
         let f = self.reader(p.seg)?;
         let mut buf = vec![0u8; p.stored_len as usize];
-        f.read_exact_at(&mut buf, p.off + HEADER)?;
+        read_exact_at(&f, &mut buf, p.off + HEADER)?;
         Ok(buf)
     }
 
@@ -241,7 +241,7 @@ impl SegmentLog {
         }
         let f = self.reader(p.seg)?;
         let mut buf = vec![0u8; len as usize];
-        f.read_exact_at(&mut buf, p.off + HEADER + from as u64)?;
+        read_exact_at(&f, &mut buf, p.off + HEADER + from as u64)?;
         Ok(buf)
     }
 
