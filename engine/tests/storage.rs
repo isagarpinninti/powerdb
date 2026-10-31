@@ -111,6 +111,8 @@ fn the_schema_is_enforced() {
     let db = open(&d);
     let bad = |f: Map<String, Value>| db.create("invoices", f, vec![]).unwrap_err().to_string();
     assert!(bad(json!({"amount": 1}).as_object().unwrap().clone()).contains("required"));
+    assert!(bad(json!({"client": ""}).as_object().unwrap().clone()).contains("not empty"), "a required text field cannot be the empty string");
+    assert!(bad(json!({"client": "   "}).as_object().unwrap().clone()).contains("not empty"));
     assert!(bad(json!({"client": 5}).as_object().unwrap().clone()).contains("must be"));
     assert!(bad(json!({"client": "x", "nope": 1}).as_object().unwrap().clone()).contains("no field"));
     assert!(bad(json!({"client": "x", "id": "forged"}).as_object().unwrap().clone()).contains("no field"));

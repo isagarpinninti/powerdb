@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* The same tokens and values as hypout (packages/react/src/styles.css): a neutral zinc palette, amber only for "live" accents, flat 1px lines.
+   Dark is the default; the OS preference and a saved choice override it (see theme.ts). */
+:root {
+  --hy-bg: #0a0a0b;
+  --hy-surface: #0d0d10;
+  --hy-raised: #131316;
+  --hy-line: #1a1a1f;
+  --hy-line-strong: #27272d;
+  --hy-ink: #fafafa;
+  --hy-muted: #a1a1aa;
+  --hy-faint: #8b8b94;
+  --hy-live: #f59e0b;
+  --hy-ok: #4ade80;
+  --hy-warn: #fbbf24;
+  --hy-danger: #f87171;
+  --hy-focus: rgba(250, 250, 250, 0.55);
+}
+:root[data-theme="light"] {
+  --hy-bg: #ffffff;
+  --hy-surface: #fafafa;
+  --hy-raised: #f4f4f5;
+  --hy-line: #e4e4e7;
+  --hy-line-strong: #d4d4d8;
+  --hy-ink: #09090b;
+  --hy-muted: #52525b;
+  --hy-faint: #66666e;
+  --hy-live: #d97706;
+  --hy-ok: #15803d;
+  --hy-warn: #b45309;
+  --hy-danger: #b91c1c;
+  --hy-focus: rgba(9, 9, 11, 0.55);
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --color-bg: var(--hy-bg);
+  --color-surface: var(--hy-surface);
+  --color-raised: var(--hy-raised);
+  --color-line: var(--hy-line);
+  --color-line-strong: var(--hy-line-strong);
+  --color-ink: var(--hy-ink);
+  --color-muted: var(--hy-muted);
+  --color-faint: var(--hy-faint);
+  --color-live: var(--hy-live);
+  --color-ok: var(--hy-ok);
+  --color-warn: var(--hy-warn);
+  --color-danger: var(--hy-danger);
+}
+
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--hy-bg); color: var(--hy-ink); font-family: var(--font-sans); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+* { border-color: var(--hy-line); scrollbar-width: thin; scrollbar-color: var(--hy-line-strong) transparent; }
+::selection { background: color-mix(in srgb, var(--hy-ink) 22%, transparent); }
+:focus-visible { outline: 2px solid var(--hy-focus); outline-offset: 2px; border-radius: 4px; }
+code, pre { font-family: var(--font-mono); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

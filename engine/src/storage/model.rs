@@ -161,14 +161,15 @@ impl CollectionDef {
                 }
                 Some(v) => {
                     let ok = match f.kind {
-                        FieldKind::Text | FieldKind::Relation => v.as_str().is_some_and(|s| f.max.is_none_or(|m| s.len() as u64 <= m)),
+                        // a required text field means something was written: the empty string does not count
+                        FieldKind::Text | FieldKind::Relation => v.as_str().is_some_and(|s| f.max.is_none_or(|m| s.len() as u64 <= m) && !(f.required && s.trim().is_empty())),
                         FieldKind::Number => v.is_number(),
                         FieldKind::Bool => v.is_boolean(),
                         FieldKind::Json => true,
                         FieldKind::File => unreachable!(),
                     };
                     if !ok {
-                        return Err(Error::Invalid(format!("field \"{}\" must be {:?}{}", f.name, f.kind, f.max.map(|m| format!(" (at most {m} bytes)")).unwrap_or_default())));
+                        return Err(Error::Invalid(format!("field \"{}\" must be {:?}{}{}", f.name, f.kind, f.max.map(|m| format!(" (at most {m} bytes)")).unwrap_or_default(), if f.required && matches!(f.kind, FieldKind::Text | FieldKind::Relation) { " and not empty" } else { "" })));
                     }
                 }
             }
