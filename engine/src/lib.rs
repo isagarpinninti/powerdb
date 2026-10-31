@@ -1,6 +1,7 @@
 //! PowerDB: structured records and files in one database. See docs/DESIGN.md.
 
 pub mod error;
+pub mod security;
 pub mod storage;
 pub mod util;
 
