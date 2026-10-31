@@ -204,6 +204,37 @@ pub struct Stats {
     pub gc_pending: u64,
 }
 
+/// Version of the on-disk layout. Bump it, and add an upgrade step in `check_format`, whenever a change would make older data unreadable.
+pub const FORMAT_VERSION: u32 = 1;
+
+/// A data directory records the layout version that wrote it, so a binary never guesses at a layout it does not know:
+/// a newer one is refused outright instead of being half-read and damaged.
+fn check_format(path: &Path) -> Result<()> {
+    let file = path.join("FORMAT");
+    match std::fs::read_to_string(&file) {
+        Ok(text) => {
+            let v: u32 = text.trim().parse().map_err(|_| {
+                Error::Corrupt(format!("{} is not a version number", file.display()))
+            })?;
+            if v > FORMAT_VERSION {
+                return Err(Error::Invalid(format!(
+                    "{} uses data format {v}, but this PowerDB understands up to {FORMAT_VERSION}; run a newer PowerDB",
+                    path.display()
+                )));
+            }
+            Ok(())
+        }
+        // A directory without the marker is either new, or written before the marker existed (format 1).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let tmp = path.join("FORMAT.tmp");
+            std::fs::write(&tmp, format!("{FORMAT_VERSION}\n"))?;
+            std::fs::rename(&tmp, &file)?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
         let path = path.as_ref();
@@ -231,6 +262,7 @@ impl Db {
             }
             Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
+        check_format(path)?;
         let mut b = Database::builder(path.join("meta"));
         if let Some(c) = opts.cache_bytes {
             b = b.cache_size(c);

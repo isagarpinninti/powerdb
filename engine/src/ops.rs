@@ -131,6 +131,7 @@ pub fn backup(data: &Path, dest: &Path, include_secret: bool) -> Result<BackupRe
     if data.join(FILE_NAME).is_file() {
         rel.push(PathBuf::from(FILE_NAME));
     }
+    rel.push(PathBuf::from("FORMAT"));
     rel.sort();
     std::fs::create_dir_all(dest)?;
     let mut files = Vec::new();

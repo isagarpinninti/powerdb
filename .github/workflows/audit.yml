@@ -1,0 +1,22 @@
+name: audit
+on:
+  push: { branches: [main], paths: ["**/Cargo.lock", "**/package-lock.json", ".github/workflows/audit.yml"] }
+  pull_request: { paths: ["**/Cargo.lock", "**/package-lock.json"] }
+  schedule: [{ cron: "17 5 * * 1" }]
+permissions: { contents: read }
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    permissions: { contents: read, checks: write, issues: write }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
+        with: { token: "${{ github.token }}" }
+  npm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: sdk
+      - run: npm audit --audit-level=high
+        working-directory: dashboard

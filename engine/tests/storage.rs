@@ -702,3 +702,32 @@ fn interval_durability_acknowledges_at_once_and_still_survives_a_clean_reopen() 
     let db = Db::open(&d.0, opts).unwrap(); // would fail on a held lock if the syncer still owned the old instance
     assert!(db.get("invoices", &id).unwrap().is_some());
 }
+
+#[test]
+fn a_directory_from_a_newer_format_is_refused_untouched() {
+    let d = Dir::new();
+    drop(Db::open(&d.0, small_opts()).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
+        "1"
+    );
+    std::fs::write(d.0.join("FORMAT"), "999\n").unwrap();
+    let err = Db::open(&d.0, small_opts()).err().expect("must refuse");
+    assert!(err.to_string().contains("999"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
+        "999"
+    );
+}
+
+#[test]
+fn a_directory_without_a_format_marker_is_adopted_as_format_1() {
+    let d = Dir::new();
+    drop(Db::open(&d.0, small_opts()).unwrap());
+    std::fs::remove_file(d.0.join("FORMAT")).unwrap();
+    drop(Db::open(&d.0, small_opts()).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
+        "1"
+    );
+}
