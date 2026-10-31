@@ -40,10 +40,22 @@ impl ChunkCodec for PlainCodec {
     }
 }
 
+/// When a write is on disk, not just in the operating system's buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Durability {
+    /// Every commit is fsynced before it is acknowledged: the log first, then the metadata journal. Safe against power loss. The journal admits one fsync at a time, so
+    /// this costs one disk flush per commit (about 3 ms on the SSD this was measured on, so roughly 330 commits per second) however many writers there are.
+    Commit,
+    /// A commit is acknowledged once the operating system has it, and a background thread fsyncs every this many milliseconds. A crash of the process loses nothing; a power
+    /// cut or kernel panic can lose up to this long of the most recent commits (never older ones, and never leaves the database inconsistent).
+    Interval(u64),
+    /// No fsync until shutdown. For benchmarks and throwaway data.
+    Never,
+}
+
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// Make a commit durable before returning: fsync the log, then the metadata journal. Off trades the last few commits on power loss for speed.
-    pub sync: bool,
+    pub durability: Durability,
     pub segment_bytes: u64,
     pub chunk: ChunkSizes,
     /// Re-hash every unencrypted chunk read in full and compare it with its key.
@@ -54,7 +66,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { sync: true, segment_bytes: 256 << 20, chunk: ChunkSizes::default(), verify_reads: true, cache_bytes: None }
+        Self { durability: Durability::Commit, segment_bytes: 256 << 20, chunk: ChunkSizes::default(), verify_reads: true, cache_bytes: None }
     }
 }
 
@@ -206,9 +218,21 @@ impl Db {
         };
         let mut codecs: HashMap<u8, Arc<dyn ChunkCodec>> = HashMap::new();
         codecs.insert(0, Arc::new(PlainCodec));
-        Ok(Db {
+        let interval = if let Durability::Interval(ms) = opts.durability { Some(ms.max(1)) } else { None };
+        let db = Db {
             inner: Arc::new(Inner { store, ks, log, opts, commit: Mutex::new(()), codecs: RwLock::new(codecs), pins: Mutex::new(HashMap::new()), gc_seq: AtomicU64::new(next_seq) }),
-        })
+        };
+        if let Some(ms) = interval {
+            // Holds only a weak reference, so the thread ends by itself once the database is dropped.
+            let weak = Arc::downgrade(&db.inner);
+            std::thread::Builder::new().name("powerdb-fsync".into()).spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                let Some(i) = weak.upgrade() else { break };
+                let _ = i.log.sync();
+                let _ = i.store.persist(PersistMode::SyncAll);
+            })?;
+        }
+        Ok(db)
     }
 
     /// Another keyspace in the same database, for modules (accounts, keys) that keep their own records beside the collections.
@@ -309,7 +333,7 @@ impl Db {
             let ptr = self.inner.log.append(&key, data.len() as u32, flags, &stored)?;
             new_ptrs.insert(key, ptr);
         }
-        if self.inner.opts.sync && !new_ptrs.is_empty() {
+        if self.inner.opts.durability == Durability::Commit && !new_ptrs.is_empty() {
             self.inner.log.sync()?;
         }
         let manifest = Manifest { size, chunks };
@@ -421,7 +445,7 @@ impl Db {
     // ---- the atomic commit ----
 
     fn persist(&self) -> Result<()> {
-        if self.inner.opts.sync {
+        if self.inner.opts.durability == Durability::Commit {
             self.inner.store.persist(PersistMode::SyncAll)?;
         }
         Ok(())

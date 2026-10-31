@@ -7,7 +7,7 @@ use powerdb::security::signed_url::UrlSigner;
 use powerdb::storage::chunker::ChunkSizes;
 use powerdb::storage::ChunkCodec;
 use powerdb::util::{from_hex_32, new_id};
-use powerdb::{Db, Options};
+use powerdb::{Db, Durability, Options};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -180,7 +180,7 @@ impl Drop for Dir {
 }
 
 fn private_db(dir: &Dir, secret: u8) -> Db {
-    let o = Options { sync: false, segment_bytes: 8 << 20, chunk: ChunkSizes { min: 16 << 10, avg: 64 << 10, max: 256 << 10 }, verify_reads: true, cache_bytes: None };
+    let o = Options { durability: Durability::Never, segment_bytes: 8 << 20, chunk: ChunkSizes { min: 16 << 10, avg: 64 << 10, max: 256 << 10 }, verify_reads: true, cache_bytes: None };
     let db = Db::open(&dir.0, o).unwrap();
     db.register_codec(Arc::new(ChaChaCodec::new(&Secrets::from_bytes([secret; 32]))));
     let f = |name: &str, kind| FieldDef { name: name.into(), kind, required: false, max: None, mime: vec![], relation: None };
@@ -240,7 +240,7 @@ fn private_collections_store_only_ciphertext_and_still_dedup() {
 #[test]
 fn a_private_collection_without_a_key_refuses_to_store_files() {
     let dir = Dir(std::env::temp_dir().join(format!("powerdb-sec-{}", new_id())));
-    let db = Db::open(&dir.0, Options { sync: false, ..Options::default() }).unwrap();
+    let db = Db::open(&dir.0, Options { durability: Durability::Never, ..Options::default() }).unwrap();
     db.create_collection(CollectionDef { name: "p".into(), fields: vec![FieldDef { name: "doc".into(), kind: FieldKind::File, required: false, max: None, mime: vec![], relation: None }], rules: Rules::default(), encrypt: true, created_at: 0 }).unwrap();
     let e = db.stage_file("p", "x/y", None, Cursor::new(vec![1, 2, 3])).err().unwrap().to_string();
     assert!(e.contains("no codec is registered"), "{e}");

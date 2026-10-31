@@ -5,7 +5,7 @@ use http_body_util::BodyExt;
 use powerdb::api::{self, AppState, Config};
 use powerdb::server;
 use powerdb::util::new_id;
-use powerdb::Options;
+use powerdb::{Durability, Options};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -25,7 +25,7 @@ struct App {
 
 fn app_with(cfg: Config) -> App {
     let dir = Dir(std::env::temp_dir().join(format!("powerdb-api-{}", new_id())));
-    let opts = Options { sync: false, segment_bytes: 8 << 20, chunk: powerdb::storage::chunker::ChunkSizes { min: 16 << 10, avg: 64 << 10, max: 256 << 10 }, verify_reads: true, cache_bytes: None };
+    let opts = Options { durability: Durability::Never, segment_bytes: 8 << 20, chunk: powerdb::storage::chunker::ChunkSizes { min: 16 << 10, avg: 64 << 10, max: 256 << 10 }, verify_reads: true, cache_bytes: None };
     let (st, boot) = server::build_state(&dir.0, opts, cfg).unwrap();
     App { app: api::router(st.clone()), st, admin: boot.admin_key.expect("first run mints an admin key"), _dir: dir }
 }

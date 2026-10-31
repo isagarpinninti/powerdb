@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use powerdb::api::{self, Config};
 use powerdb::auth::Access;
 use powerdb::server;
-use powerdb::Options;
+use powerdb::{Durability, Options};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -32,9 +32,12 @@ enum Cmd {
         /// Trust X-Forwarded-For for rate limiting. Only behind a proxy you control.
         #[arg(long)]
         trust_proxy: bool,
-        /// Do not fsync on every commit. Faster; the last commits can be lost on power failure.
-        #[arg(long)]
-        no_sync: bool,
+        /// When a write must be on disk before it is acknowledged: `commit` (every write; safest, about 330 writes/s), `interval` (background fsync, see --interval-ms) or `never`.
+        #[arg(long, value_enum, default_value = "commit", env = "POWERDB_DURABILITY")]
+        durability: DurabilityArg,
+        /// With --durability interval: milliseconds between fsyncs. A power cut can lose about this much recent data.
+        #[arg(long, default_value_t = 100)]
+        interval_ms: u64,
         /// Largest single file accepted, in GiB.
         #[arg(long, default_value_t = 5)]
         max_upload_gib: u64,
@@ -58,6 +61,13 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+#[derive(Clone, clap::ValueEnum)]
+enum DurabilityArg {
+    Commit,
+    Interval,
+    Never,
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -95,7 +105,7 @@ async fn main() {
                 }
             }
         }
-        Cmd::Serve { data, addr, open_registration, cors_origin, trust_proxy, no_sync, max_upload_gib } => match serve(data, addr, open_registration, cors_origin, trust_proxy, no_sync, max_upload_gib).await {
+        Cmd::Serve { data, addr, open_registration, cors_origin, trust_proxy, durability, interval_ms, max_upload_gib } => match serve(data, addr, open_registration, cors_origin, trust_proxy, durability, interval_ms, max_upload_gib).await {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("powerdb: {e}");
@@ -106,9 +116,9 @@ async fn main() {
     std::process::exit(code);
 }
 
-async fn serve(data: PathBuf, addr: SocketAddr, open_registration: bool, cors_origins: Vec<String>, trust_proxy: bool, no_sync: bool, max_upload_gib: u64) -> Result<(), Box<dyn std::error::Error>> {
+async fn serve(data: PathBuf, addr: SocketAddr, open_registration: bool, cors_origins: Vec<String>, trust_proxy: bool, durability: DurabilityArg, interval_ms: u64, max_upload_gib: u64) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Config { open_registration, trust_proxy, cors_origins, max_upload_bytes: max_upload_gib << 30, ..Config::default() };
-    let (state, boot) = server::build_state(&data, Options { sync: !no_sync, ..Options::default() }, cfg)?;
+    let (state, boot) = server::build_state(&data, Options { durability: match durability { DurabilityArg::Commit => Durability::Commit, DurabilityArg::Interval => Durability::Interval(interval_ms), DurabilityArg::Never => Durability::Never }, ..Options::default() }, cfg)?;
     if let Some(k) = &boot.admin_key {
         eprintln!("\nFirst run: no accounts exist, so an administrator API key was created.\n\n    {k}\n\nSave it now; it is shown only once. Paste it into the dashboard to sign in.\n(Or set POWERDB_ADMIN_EMAIL and POWERDB_ADMIN_PASSWORD before the first start to create an account instead.)\n");
     }

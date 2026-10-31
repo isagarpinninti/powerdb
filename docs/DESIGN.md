@@ -55,3 +55,20 @@ isolation is snapshot reads of the LSM. The single-call "create with files" and 
   user input is never concatenated into anything that is executed. The parser itself is fuzzed.
 * **Magic-byte checking** stops a file whose bytes do not match its declared type (an `.exe` named `.png`). It does not detect malware, and a polyglot file that is valid as two formats passes.
 * **"Sub-millisecond"** is a claim about the engine's own operations; it is measured (`powerdb bench`) and reported with its conditions, not promised for network round trips.
+
+
+## Durability and what it costs (measured)
+
+`--durability` chooses when a write is on disk before it is acknowledged:
+
+| mode | meaning | creates over HTTP, 16 connections |
+|---|---|---|
+| `commit` (default) | the log, then the metadata journal, are fsynced before the reply | **333 / s**, p50 48 ms (one flush at a time, about 3 ms each) |
+| `interval` (`--interval-ms`, default 100) | acknowledged once the operating system has it; a background thread fsyncs every interval. A process crash loses nothing; a power cut loses at most about one interval of recent writes and never leaves the database inconsistent | **57,900 / s**, p50 under 1 ms, p99 1 ms |
+| `never` | no fsync until shutdown | 59,400 / s |
+
+Measured on one MacBook Air (M2, internal SSD), release build, ApacheBench `-k -n 4000` against `powerdb serve` on 127.0.0.1, one run per row. ApacheBench is single-threaded and may be limiting the fast rows.
+The storage library admits one fsync at a time and blocks other writers while it runs, so the `commit` rate is flat in the number of writers (checked in the engine without HTTP: 1, 4 and 16 threads all give about 335 commits/s). Combining
+concurrent commits into one flush would raise it but requires combining their reference-count updates into a single batch; it is not built. The default is the safe mode on purpose: "fast" is something you choose, knowing what it risks.
+
+Reads, measured the same way (16 connections): health check 160,000 / s; a record by id 63,000 / s (65,000 with an API key); list of the newest 20 42,000 / s; a filtered and sorted list over 300 records 14,500 / s; a 100 KiB file through a signed link 26,000 / s.

@@ -1,7 +1,7 @@
 use powerdb::model::{CollectionDef, FieldDef, FieldKind, Rules};
 use powerdb::storage::chunker::ChunkSizes;
 use powerdb::util::{from_hex_32, new_id};
-use powerdb::{Db, Options};
+use powerdb::{Db, Durability, Options};
 use serde_json::{json, Map, Value};
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -36,7 +36,7 @@ fn data(len: usize, seed: u64) -> Vec<u8> {
 }
 
 fn small_opts() -> Options {
-    Options { sync: false, segment_bytes: 4 << 20, chunk: ChunkSizes { min: 16 << 10, avg: 64 << 10, max: 256 << 10 }, verify_reads: true, cache_bytes: None }
+    Options { durability: Durability::Never, segment_bytes: 4 << 20, chunk: ChunkSizes { min: 16 << 10, avg: 64 << 10, max: 256 << 10 }, verify_reads: true, cache_bytes: None }
 }
 
 fn schema() -> CollectionDef {
@@ -418,4 +418,23 @@ fn collection_names_and_duplicates_are_checked() {
     c.name = "Bad Name".into();
     assert!(db.create_collection(c).is_err());
     assert!(db.collection("missing").is_err());
+}
+
+#[test]
+fn interval_durability_acknowledges_at_once_and_still_survives_a_clean_reopen() {
+    use powerdb::Durability;
+    let d = Dir::new();
+    let opts = Options { durability: Durability::Interval(20), ..small_opts() };
+    let id = {
+        let db = Db::open(&d.0, opts.clone()).unwrap();
+        db.create_collection(schema()).unwrap();
+        let t = std::time::Instant::now();
+        let bytes = data(300_000, 40);
+        let r = db.create("invoices", fields("fast", 1), vec![("document".into(), stage(&db, &bytes))]).unwrap();
+        assert!(t.elapsed() < std::time::Duration::from_millis(500), "an acknowledged write does not wait for a disk flush");
+        std::thread::sleep(std::time::Duration::from_millis(80)); // let the background fsync run at least once
+        r.id
+    }; // dropped: the syncer thread holds only a weak reference, so nothing keeps the database open
+    let db = Db::open(&d.0, opts).unwrap(); // would fail on a held lock if the syncer still owned the old instance
+    assert!(db.get("invoices", &id).unwrap().is_some());
 }

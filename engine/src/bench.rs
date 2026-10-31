@@ -2,7 +2,7 @@
 //! are the engine's own cost per operation, not what a client sees.
 
 use powerdb::model::{CollectionDef, FieldDef, FieldKind, Rules};
-use powerdb::storage::{Db, Options};
+use powerdb::storage::{Db, Durability, Options};
 use powerdb::util::{from_hex_32, new_id};
 use serde_json::{json, Map, Value};
 use std::io::Cursor;
@@ -34,9 +34,9 @@ pub fn run(args: &[String]) -> i32 {
     let get = |name: &str, d: usize| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(d);
     let n = get("--records", 20_000);
     let big_mib = get("--big-mib", 256);
-    let sync = args.iter().any(|a| a == "--sync");
+    let durability = if args.iter().any(|a| a == "--sync") { Durability::Commit } else if args.iter().any(|a| a == "--interval") { Durability::Interval(100) } else { Durability::Never };
     let dir = std::env::temp_dir().join(format!("powerdb-bench-{}", new_id()));
-    let db = match Db::open(&dir, Options { sync, ..Options::default() }) {
+    let db = match Db::open(&dir, Options { durability, ..Options::default() }) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("powerdb: {e}");
@@ -52,7 +52,7 @@ pub fn run(args: &[String]) -> i32 {
         created_at: 0,
     })
     .expect("create collection");
-    println!("PowerDB storage engine, MEASURED on this machine ({} cores), embedded: no network, HTTP, auth or rules. Durability: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1), if sync { "fsync on every commit" } else { "OS buffers only (a power cut can lose the last commits); run with --sync for fsync" });
+    println!("PowerDB storage engine, MEASURED on this machine ({} cores), embedded: no network, HTTP, auth or rules. Durability: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1), match durability { Durability::Commit => "fsync before every acknowledgement", Durability::Interval(_) => "background fsync every 100 ms", Durability::Never => "OS buffers only (a power cut can lose recent commits); --sync or --interval for the safer modes" });
     println!("records, one writer thread:");
 
     let fields = |i: usize| -> Map<String, Value> {

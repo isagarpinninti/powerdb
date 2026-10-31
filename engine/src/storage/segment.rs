@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 const MAGIC: [u8; 4] = *b"PDB1";
 pub const HEADER: u64 = 4 + 32 + 4 + 4 + 1;
@@ -64,7 +64,16 @@ struct Active {
     len: u64,
 }
 
+#[derive(Default)]
+struct SyncState {
+    appended: u64,
+    synced: u64,
+    syncing: bool,
+}
+
 pub struct SegmentLog {
+    sync_state: Mutex<SyncState>,
+    sync_cv: Condvar,
     dir: PathBuf,
     max_bytes: u64,
     active: Mutex<Active>,
@@ -124,7 +133,7 @@ impl SegmentLog {
         }
         let mut readers = HashMap::new();
         readers.insert(id, file.clone());
-        Ok(Self { dir: dir.to_path_buf(), max_bytes, active: Mutex::new(Active { id, file, len: good }), readers: RwLock::new(readers) })
+        Ok(Self { sync_state: Mutex::new(SyncState::default()), sync_cv: Condvar::new(), dir: dir.to_path_buf(), max_bytes, active: Mutex::new(Active { id, file, len: good }), readers: RwLock::new(readers) })
     }
 
     pub fn active_id(&self) -> u32 {
@@ -177,14 +186,35 @@ impl SegmentLog {
         let off = a.len;
         a.file.write_all_at(&buf, off)?;
         a.len += entry;
+        self.sync_state.lock().unwrap_or_else(|e| e.into_inner()).appended += 1;
         Ok(ChunkPtr { seg: a.id, off, stored_len: payload.len() as u32, raw_len, flags })
     }
 
-    /// Makes everything appended so far durable.
+    /// Makes everything appended so far durable. Callers that arrive while a sync is running wait for it, and for at most one more, instead of each paying for their own.
     pub fn sync(&self) -> Result<()> {
-        let a = self.active.lock().unwrap_or_else(|e| e.into_inner());
-        a.file.sync_data()?;
-        Ok(())
+        let mut st = self.sync_state.lock().unwrap_or_else(|e| e.into_inner());
+        let want = st.appended;
+        loop {
+            if st.synced >= want {
+                return Ok(());
+            }
+            if st.syncing {
+                st = self.sync_cv.wait(st).unwrap_or_else(|e| e.into_inner());
+                continue;
+            }
+            st.syncing = true;
+            let target = st.appended;
+            drop(st);
+            let file = self.active.lock().unwrap_or_else(|e| e.into_inner()).file.clone();
+            let r = file.sync_data();
+            st = self.sync_state.lock().unwrap_or_else(|e| e.into_inner());
+            st.syncing = false;
+            if r.is_ok() {
+                st.synced = st.synced.max(target);
+            }
+            self.sync_cv.notify_all();
+            r?;
+        }
     }
 
     fn reader(&self, seg: u32) -> Result<Arc<File>> {

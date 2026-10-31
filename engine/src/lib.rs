@@ -9,4 +9,4 @@ pub mod storage;
 pub mod util;
 
 pub use error::{Error, Result};
-pub use storage::{model, Db, Options};
+pub use storage::{model, Db, Durability, Options};

@@ -127,7 +127,7 @@ impl Db {
                 moved.insert(*key, np);
             }
         }
-        if self.inner.opts.sync {
+        if self.inner.opts.durability == super::Durability::Commit {
             log.sync()?; // the copies must be durable before the index points at them
         }
 
@@ -150,7 +150,7 @@ impl Db {
                     let payload = log.read_payload(ptr)?;
                     let np = log.append(key, ptr.raw_len, ptr.flags, &payload)?;
                     copied += np.entry_len();
-                    if self.inner.opts.sync {
+                    if self.inner.opts.durability == super::Durability::Commit {
                         log.sync()?;
                     }
                     batch.insert(&ks.chunks, key.to_vec(), np.to_bytes().to_vec());
@@ -158,7 +158,7 @@ impl Db {
             }
             batch.remove(&ks.seg_dead, seg.to_be_bytes().to_vec());
             batch.commit()?;
-            if self.inner.opts.sync {
+            if self.inner.opts.durability == super::Durability::Commit {
                 self.inner.store.persist(fjall::PersistMode::SyncAll)?;
             }
         }

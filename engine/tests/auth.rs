@@ -3,7 +3,7 @@ use base64::Engine;
 use hmac::{Hmac, KeyInit, Mac};
 use powerdb::auth::{Access, Action, Auth, Principal, Role, SESSION_SECS};
 use powerdb::util::new_id;
-use powerdb::{Db, Options};
+use powerdb::{Db, Durability, Options};
 use serde_json::json;
 use sha2::Sha256;
 
@@ -16,7 +16,7 @@ impl Drop for Dir {
 
 fn setup() -> (Dir, Db, Auth) {
     let d = Dir(std::env::temp_dir().join(format!("powerdb-auth-{}", new_id())));
-    let db = Db::open(&d.0, Options { sync: false, ..Options::default() }).unwrap();
+    let db = Db::open(&d.0, Options { durability: Durability::Never, ..Options::default() }).unwrap();
     let auth = Auth::new(&db, [3; 32]).unwrap();
     (d, db, auth)
 }

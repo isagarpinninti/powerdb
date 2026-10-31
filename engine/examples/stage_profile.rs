@@ -1,5 +1,5 @@
 use powerdb::model::{CollectionDef, Rules};
-use powerdb::storage::{Db, Options};
+use powerdb::storage::{Db, Durability, Options};
 use std::io::Cursor;
 use std::time::Instant;
 
@@ -8,7 +8,7 @@ fn main() {
     let data: Vec<u8> = (0..256usize << 20).map(|_| { x ^= x << 13; x ^= x >> 7; x ^= x << 17; (x >> 24) as u8 }).collect();
     for (label, sync, seg) in [("sync off, 256 MiB segments", false, 256u64 << 20), ("sync off, 1 GiB segments (no roll during the file)", false, 1 << 30), ("sync on, 1 GiB segments", true, 1 << 30)] {
         let dir = std::env::temp_dir().join(format!("pdb-sp-{}-{}", std::process::id(), label.len()));
-        let db = Db::open(&dir, Options { sync, segment_bytes: seg, ..Options::default() }).unwrap();
+        let db = Db::open(&dir, Options { durability: if sync { Durability::Commit } else { Durability::Never }, segment_bytes: seg, ..Options::default() }).unwrap();
         db.create_collection(CollectionDef { name: "c".into(), fields: vec![], rules: Rules::default(), encrypt: false, created_at: 0 }).unwrap();
         let t = Instant::now();
         let p = db.stage_file("c", "x/y", None, Cursor::new(&data)).unwrap();
