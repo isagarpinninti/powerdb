@@ -259,7 +259,7 @@ impl Auth {
         self.issue_at(r, now_ms() / 1000)
     }
 
-    pub(crate) fn issue_at(&self, r: &UserRow, now: i64) -> String {
+    fn issue_at(&self, r: &UserRow, now: i64) -> String {
         let claims = json!({"sub": r.id, "tv": r.token_version, "iat": now, "exp": now + SESSION_SECS});
         let input = format!("{}.{}", URL_SAFE_NO_PAD.encode(JWT_HEADER), URL_SAFE_NO_PAD.encode(claims.to_string()));
         let sig = self.mac(&input).finalize().into_bytes();

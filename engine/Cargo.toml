@@ -15,15 +15,31 @@ path = "src/main.rs"
 
 [dependencies]
 argon2 = { version = "0.6.0", features = ["getrandom"] }
+axum = { version = "0.8.9", features = ["multipart"] }
 base64 = "0.23.1"
 blake3 = "1.8.7"
+bytes = "1.12.1"
 chacha20poly1305 = "0.11.0"
+clap = { version = "4.6.7", features = ["derive", "env"] }
 fastcdc = "5.0.0"
 fjall = "3.1.13"
+futures-util = "0.3.34"
 getrandom = "0.4.3"
 hmac = "0.13.0"
+mime_guess = "2.0.5"
+rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 subtle = "2.6.1"
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-stream = "0.1.19"
+tokio-util = "0.7.20"
+tower = "0.5.3"
+tower-http = { version = "0.7.1", features = ["limit", "trace", "set-header", "compression-gzip", "cors"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
