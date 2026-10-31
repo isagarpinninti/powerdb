@@ -102,8 +102,27 @@ pub(crate) struct Inner {
     pub gc_seq: AtomicU64,
 }
 
+/// Stops the background fsync thread, and waits for it, when the last `Db` handle goes away.
+/// Without the wait, the thread could still hold the database for a moment after `drop` returned, and the data
+/// directory's lock with it, so reopening right away would be refused.
+struct Closer {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Closer {
+    fn drop(&mut self) {
+        drop(self.stop.take()); // wakes the thread at once: its wait ends when the sender is gone
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Db {
+    // Field order matters: `closer` drops first, joining the thread, so `inner` is then released by this thread, not by the syncer.
+    _closer: Arc<Closer>,
     pub(crate) inner: Arc<Inner>,
 }
 
@@ -298,33 +317,44 @@ impl Db {
         } else {
             None
         };
-        let db = Db {
-            inner: Arc::new(Inner {
-                _lock: lock,
-                store,
-                ks,
-                log,
-                opts,
-                commit: Mutex::new(()),
-                codecs: RwLock::new(codecs),
-                pins: Mutex::new(HashMap::new()),
-                gc_seq: AtomicU64::new(next_seq),
-            }),
+        let inner = Arc::new(Inner {
+            _lock: lock,
+            store,
+            ks,
+            log,
+            opts,
+            commit: Mutex::new(()),
+            codecs: RwLock::new(codecs),
+            pins: Mutex::new(HashMap::new()),
+            gc_seq: AtomicU64::new(next_seq),
+        });
+        let mut closer = Closer {
+            stop: None,
+            thread: None,
         };
         if let Some(ms) = interval {
-            // Holds only a weak reference, so the thread ends by itself once the database is dropped.
-            let weak = Arc::downgrade(&db.inner);
-            std::thread::Builder::new()
-                .name("powerdb-fsync".into())
-                .spawn(move || {
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_millis(ms));
-                        let Some(i) = weak.upgrade() else { break };
-                        let _ = i.log.sync();
-                        let _ = i.store.persist(PersistMode::SyncAll);
-                    }
-                })?;
+            // Holds only a weak reference, and is stopped and joined by `Closer`.
+            let weak = Arc::downgrade(&inner);
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            closer.stop = Some(tx);
+            closer.thread = Some(
+                std::thread::Builder::new()
+                    .name("powerdb-fsync".into())
+                    .spawn(move || {
+                        while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                            rx.recv_timeout(std::time::Duration::from_millis(ms))
+                        {
+                            let Some(i) = weak.upgrade() else { break };
+                            let _ = i.log.sync();
+                            let _ = i.store.persist(PersistMode::SyncAll);
+                        }
+                    })?,
+            );
         }
+        let db = Db {
+            _closer: Arc::new(closer),
+            inner,
+        };
         Ok(db)
     }
 

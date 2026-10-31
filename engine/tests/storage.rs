@@ -731,3 +731,19 @@ fn a_directory_without_a_format_marker_is_adopted_as_format_1() {
         "1"
     );
 }
+
+#[test]
+fn dropping_the_database_releases_the_directory_at_once_even_with_a_busy_syncer() {
+    use powerdb::Durability;
+    let d = Dir::new();
+    let opts = Options {
+        durability: Durability::Interval(1),
+        ..small_opts()
+    };
+    for round in 0..300 {
+        let db = Db::open(&d.0, opts.clone())
+            .unwrap_or_else(|e| panic!("round {round}: reopen right after drop failed: {e}"));
+        std::thread::sleep(std::time::Duration::from_micros(900 + (round % 7) * 70)); // land inside the syncer's fsync
+        drop(db);
+    }
+}
