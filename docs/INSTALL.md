@@ -29,7 +29,7 @@ With automatic HTTPS: `POWERDB_DOMAIN=db.example.com docker compose up -d`.
 
 ## First run
 ```bash
-powerdb init ./mydata      # creates the data dir, prints the first admin credentials once
+powerdb init ./mydata      # creates the data dir, prints the first admin API key once
 powerdb serve --data ./mydata
 ```
 Open http://127.0.0.1:8090. `powerdb status` checks a running server.

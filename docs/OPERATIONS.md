@@ -26,7 +26,7 @@ Stop, back up, replace the binary, start. There is no migration tooling yet; kee
 `--durability commit` (default, fsync per commit, ~333 commits/s measured on one Mac), `interval` (background fsync), `never` (tests only).
 
 ## Security checklist
-- Change/rotate the bootstrap admin password; keep `--open-registration` off unless you want public sign-up.
+- The first admin API key is shown once by `init`; store it safely and create scoped keys for apps. Keep `--open-registration` off unless you want public sign-up.
 - Leave CORS off unless a browser app on another origin needs it (`--cors-origin`).
 - Keep `secret.key` mode 0600, backed up separately.
 - Collections with no rule are locked; an empty rule means public.
