@@ -211,6 +211,11 @@ impl Db {
         })
     }
 
+    /// Another keyspace in the same database, for modules (accounts, keys) that keep their own records beside the collections.
+    pub fn keyspace(&self, name: &str) -> Result<Keyspace> {
+        Ok(self.inner.store.keyspace(name, KeyspaceCreateOptions::default)?)
+    }
+
     /// Registers the codec used for encrypted collections (and for decoding any chunk it wrote).
     pub fn register_codec(&self, codec: Arc<dyn ChunkCodec>) {
         self.inner.codecs.write().unwrap_or_else(|e| e.into_inner()).insert(codec.flags(), codec);
