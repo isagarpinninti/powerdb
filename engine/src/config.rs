@@ -21,6 +21,9 @@ pub struct FileConfig {
     /// "commit", "interval" or "never"
     pub durability: Option<String>,
     pub interval_ms: Option<u64>,
+    /// PEM certificate chain and private key; both or neither. Relative paths are relative to the data directory.
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
 }
 
 /// What the command line (and environment) said. `None` or `false` means "not given", so the file may decide.
@@ -33,10 +36,14 @@ pub struct Overrides {
     pub max_upload_gib: Option<u64>,
     pub durability: Option<String>,
     pub interval_ms: Option<u64>,
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Settings {
+    /// Certificate and key, when the server terminates TLS itself.
+    pub tls: Option<(PathBuf, PathBuf)>,
     pub addr: SocketAddr,
     pub api: ApiConfig,
     pub options: Options,
@@ -90,7 +97,17 @@ impl Settings {
             max_upload_bytes: cli.max_upload_gib.or(file.max_upload_gib).unwrap_or(5) << 30,
             ..ApiConfig::default()
         };
+        let tls = match (cli.tls_cert.or(file.tls_cert), cli.tls_key.or(file.tls_key)) {
+            (Some(c), Some(k)) => Some((c, k)),
+            (None, None) => None,
+            _ => {
+                return Err(Error::Invalid(
+                    "tls_cert and tls_key must be given together".into(),
+                ));
+            }
+        };
         Ok(Settings {
+            tls,
             addr: cli
                 .addr
                 .or(file.addr)
@@ -107,7 +124,7 @@ impl Settings {
 /// The file `powerdb init` writes: every setting, commented, at its default.
 pub const TEMPLATE: &str = r#"# PowerDB settings. Command-line flags and environment variables (POWERDB_ADDR, POWERDB_DURABILITY, ...) override this file.
 
-# Where to listen. 127.0.0.1 accepts connections from this machine only. To serve other machines use 0.0.0.0:8090 and put a TLS proxy in front (see docs/OPERATIONS.md).
+# Where to listen. 127.0.0.1 accepts connections from this machine only. To serve other machines use 0.0.0.0:8090 and serve HTTPS (tls_cert, tls_key below) or put a TLS proxy in front (see docs/OPERATIONS.md).
 addr = "127.0.0.1:8090"
 
 # When a write must be on disk before it is acknowledged:
@@ -128,6 +145,11 @@ cors_origins = []
 
 # Largest single file accepted, in GiB.
 max_upload_gib = 5
+
+# Serve HTTPS directly instead of using a proxy: PEM files (relative paths are relative to this directory).
+# The files are re-read every hour, so a renewed certificate takes effect without a restart.
+# tls_cert = "cert.pem"
+# tls_key = "key.pem"
 "#;
 
 pub fn data_dir_default() -> PathBuf {
@@ -180,6 +202,23 @@ mod tests {
         assert_eq!(s.addr.port(), 1234);
         assert_eq!(s.options.durability, Durability::Never);
         assert_eq!(s.api.cors_origins, vec!["https://b.example"]);
+    }
+
+    #[test]
+    fn tls_needs_both_files_or_neither() {
+        let one = |c: Option<&str>, k: Option<&str>| {
+            Settings::resolve(
+                Overrides {
+                    tls_cert: c.map(Into::into),
+                    tls_key: k.map(Into::into),
+                    ..Default::default()
+                },
+                None,
+            )
+        };
+        assert!(one(Some("c"), None).is_err() && one(None, Some("k")).is_err());
+        assert!(one(Some("c"), Some("k")).unwrap().tls.is_some());
+        assert!(one(None, None).unwrap().tls.is_none());
     }
 
     #[test]

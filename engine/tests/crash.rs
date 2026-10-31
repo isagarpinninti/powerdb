@@ -73,9 +73,10 @@ fn crash_writer_child() {
     }
     let mut out = std::io::stdout();
     let mut previous: Option<String> = None;
-    for i in 0u64.. {
+    let mut i = 0u64;
+    loop {
         // every third file repeats earlier content so deduplication and refcounts are exercised under the kill too
-        let seed = if i % 3 == 0 { i % 6 } else { i };
+        let seed = if i.is_multiple_of(3) { i % 6 } else { i };
         let file = db
             .stage_file(
                 "docs",
@@ -93,17 +94,18 @@ fn crash_writer_child() {
             .unwrap();
         writeln!(out, "ACK {}", rec.id).unwrap();
         out.flush().unwrap();
-        if i % 4 == 3 {
-            if let Some(p) = previous.take() {
-                // announced first: a kill between the delete and its acknowledgement leaves it legitimately either way
-                writeln!(out, "DELETING {p}").unwrap();
-                out.flush().unwrap();
-                db.delete("docs", &p).unwrap();
-                writeln!(out, "DEL {p}").unwrap();
-                out.flush().unwrap();
-            }
+        if i % 4 == 3
+            && let Some(p) = previous.take()
+        {
+            // announced first: a kill between the delete and its acknowledgement leaves it legitimately either way
+            writeln!(out, "DELETING {p}").unwrap();
+            out.flush().unwrap();
+            db.delete("docs", &p).unwrap();
+            writeln!(out, "DEL {p}").unwrap();
+            out.flush().unwrap();
         }
         previous = Some(rec.id);
+        i += 1;
     }
 }
 

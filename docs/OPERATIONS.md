@@ -1,10 +1,17 @@
 # Operating PowerDB
 
 ## Network and TLS
-PowerDB listens on `127.0.0.1:8090` by default and does **not** terminate TLS. For anything beyond
-localhost put a TLS proxy in front (Caddy, nginx, a cloud load balancer) and pass `--trust-proxy`
-so rate limiting sees the real client address. `docker-compose.yml` is a working Caddy example
-(unrun). Bearer tokens travel in headers; never expose plain HTTP to the internet.
+PowerDB listens on `127.0.0.1:8090` by default. Two ways to serve other machines safely:
+
+1. **Built-in HTTPS.** `powerdb serve --addr 0.0.0.0:8443 --tls-cert cert.pem --tls-key key.pem` (or `tls_cert` / `tls_key` in
+   `powerdb.toml`). TLS 1.2/1.3 via rustls. The files are re-read hourly, so a renewed certificate (certbot, step-ca)
+   takes effect without a restart; a bad renewal is logged and the old certificate keeps serving.
+   Tested by hand with a self-signed certificate on macOS (HTTPS served, plain HTTP refused, bad key refused);
+   not yet covered by an automated test.
+2. **A TLS proxy** (Caddy, nginx, a load balancer) in front, with `--trust-proxy` so rate limiting sees client addresses.
+   `docker-compose.yml` is a Caddy example (unrun).
+
+Never expose plain HTTP beyond localhost: bearer tokens travel in headers. `powerdb status` works against either mode.
 
 ## Configuration
 Order: flags > environment (`POWERDB_*`) > `powerdb.toml` in the data dir > defaults. Unknown keys in the file are errors.
@@ -20,7 +27,7 @@ There is no hot backup yet.
 `powerdb status` (liveness), `powerdb check` (re-hashes all chunks, recomputes reference counts; `--quick` skips chunk hashing).
 
 ## Upgrades
-Stop, back up, replace the binary, start. There is no migration tooling yet; keep the backup until `powerdb check` passes on the new version.
+Stop, back up, replace the binary, start. The data directory records its layout version in `FORMAT`: a binary refuses (without touching anything) a directory written by a newer layout. Today there is only layout 1, so there are no migrations yet; keep the backup until `powerdb check` passes on the new version.
 
 ## Durability
 `--durability commit` (default, fsync per commit, ~333 commits/s measured on one Mac), `interval` (background fsync), `never` (tests only).

@@ -53,6 +53,12 @@ enum Cmd {
         /// Largest single file accepted, in GiB.
         #[arg(long)]
         max_upload_gib: Option<u64>,
+        /// PEM certificate chain: serve HTTPS directly. Needs --tls-key.
+        #[arg(long, env = "POWERDB_TLS_CERT")]
+        tls_cert: Option<PathBuf>,
+        /// PEM private key for --tls-cert.
+        #[arg(long, env = "POWERDB_TLS_KEY")]
+        tls_key: Option<PathBuf>,
         /// Use a temporary data directory that is deleted when the server stops. For tests and trying things out.
         #[arg(long)]
         ephemeral: bool,
@@ -230,6 +236,8 @@ async fn main() {
             durability,
             interval_ms,
             max_upload_gib,
+            tls_cert,
+            tls_key,
             ephemeral,
         } => {
             let cli = Overrides {
@@ -240,6 +248,8 @@ async fn main() {
                 max_upload_gib,
                 durability,
                 interval_ms,
+                tls_cert,
+                tls_key,
             };
             match serve(data, cli, ephemeral).await {
                 Ok(()) => 0,
@@ -324,31 +334,79 @@ async fn serve(
             data.display()
         );
     }
-    if !settings.addr.ip().is_loopback() {
+    if !settings.addr.ip().is_loopback() && settings.tls.is_none() {
         eprintln!(
-            "Listening on {}: this is reachable from other machines. Put a TLS proxy in front of it (docs/OPERATIONS.md); the API sends bearer tokens.",
+            "Listening on {}: this is reachable from other machines. Serve HTTPS (tls_cert/tls_key) or put a TLS proxy in front of it (docs/OPERATIONS.md); the API sends bearer tokens.",
             settings.addr
         );
     }
     server::spawn_maintenance(state.db.clone());
     let db = state.db.clone();
     let app = api::router(state);
-    let listener = tokio::net::TcpListener::bind(settings.addr).await?;
-    tracing::info!(
-        "PowerDB {} listening on http://{} (data: {})",
-        env!("CARGO_PKG_VERSION"),
-        settings.addr,
-        data.display()
-    );
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(async {
-        shutdown_signal().await;
-        tracing::info!("shutting down");
-    })
-    .await?;
+    let svc = app.into_make_service_with_connect_info::<SocketAddr>();
+    if let Some((cert, key)) = &settings.tls {
+        let rel = |p: &PathBuf| {
+            if p.is_relative() {
+                data.join(p)
+            } else {
+                p.clone()
+            }
+        };
+        let (cert, key) = (rel(cert), rel(key));
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)
+            .await
+            .map_err(|e| {
+                format!(
+                    "cannot load the TLS certificate {} / key {}: {e}",
+                    cert.display(),
+                    key.display()
+                )
+            })?;
+        let reload = tls.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                match reload.reload_from_pem_file(&cert, &key).await {
+                    Ok(()) => tracing::info!("TLS certificate reloaded"),
+                    Err(e) => {
+                        tracing::warn!("TLS certificate not reloaded, keeping the old one: {e}")
+                    }
+                }
+            }
+        });
+        let handle = axum_server::Handle::new();
+        let h = handle.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            tracing::info!("shutting down");
+            h.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        });
+        tracing::info!(
+            "PowerDB {} listening on https://{} (data: {})",
+            env!("CARGO_PKG_VERSION"),
+            settings.addr,
+            data.display()
+        );
+        axum_server::bind_rustls(settings.addr, tls)
+            .handle(handle)
+            .serve(svc)
+            .await?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(settings.addr).await?;
+        tracing::info!(
+            "PowerDB {} listening on http://{} (data: {})",
+            env!("CARGO_PKG_VERSION"),
+            settings.addr,
+            data.display()
+        );
+        axum::serve(listener, svc)
+            .with_graceful_shutdown(async {
+                shutdown_signal().await;
+                tracing::info!("shutting down");
+            })
+            .await?;
+    }
     db.flush()?;
     Ok(())
 }

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 fn is_empty_dir(p: &Path) -> Result<bool> {
@@ -216,8 +217,44 @@ pub fn restore(from: &Path, data: &Path) -> Result<BackupReport> {
     })
 }
 
-/// Asks a running server whether it is up, using a plain HTTP request (no client library needed).
-pub fn status(addr: SocketAddr) -> Result<String> {
+/// Accepts any certificate. Only for `status`, which sends no credentials and learns nothing but "is it up";
+/// it must never be used for a connection that carries data.
+#[derive(Debug)]
+struct LivenessOnly(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for LivenessOnly {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        m: &[u8],
+        c: &rustls::pki_types::CertificateDer<'_>,
+        d: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(m, c, d, &self.0.signature_verification_algorithms)
+    }
+    fn verify_tls13_signature(
+        &self,
+        m: &[u8],
+        c: &rustls::pki_types::CertificateDer<'_>,
+        d: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(m, c, d, &self.0.signature_verification_algorithms)
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+fn probe(addr: SocketAddr, tls: bool) -> Result<String> {
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
@@ -225,15 +262,45 @@ pub fn status(addr: SocketAddr) -> Result<String> {
         ))
     })?;
     s.set_read_timeout(Some(Duration::from_secs(3)))?;
-    s.write_all(
-        format!("GET /api/v1/healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
-            .as_bytes(),
-    )?;
-    let mut resp = String::new();
-    s.read_to_string(&mut resp)?;
+    let request =
+        format!("GET /api/v1/healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    let raw = if tls {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let cfg = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .map_err(|e| Error::Invalid(e.to_string()))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(LivenessOnly(provider)))
+            .with_no_client_auth();
+        let name = rustls::pki_types::ServerName::IpAddress(addr.ip().into());
+        let mut conn = rustls::ClientConnection::new(Arc::new(cfg), name)
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+        let mut stream = rustls::Stream::new(&mut conn, &mut s);
+        stream.write_all(request.as_bytes())?;
+        // a server that closes without a TLS close_notify ends the read with an error after the body; the body is what matters
+        let mut raw = Vec::new();
+        let _ = stream.read_to_end(&mut raw);
+        raw
+    } else {
+        s.write_all(request.as_bytes())?;
+        let mut raw = Vec::new();
+        let _ = s.read_to_end(&mut raw);
+        raw
+    };
+    Ok(String::from_utf8_lossy(&raw).into_owned())
+}
+
+/// Asks a running server whether it is up. Plain HTTP first; if nothing HTTP comes back, HTTPS (a server with TLS configured).
+pub fn status(addr: SocketAddr) -> Result<String> {
+    let mut scheme = "http";
+    let mut resp = probe(addr, false)?;
+    if !resp.starts_with("HTTP/") {
+        resp = probe(addr, true).unwrap_or_default();
+        scheme = "https";
+    }
     let line = resp.lines().next().unwrap_or("");
     if line.contains(" 200 ") && resp.trim_end().ends_with("ok") {
-        Ok(format!("PowerDB is running at http://{addr}"))
+        Ok(format!("PowerDB is running at {scheme}://{addr}"))
     } else {
         Err(Error::Invalid(format!(
             "something answered at {addr}, but it is not a healthy PowerDB: {line}"
