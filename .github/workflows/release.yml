@@ -79,8 +79,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with: { pattern: "{pkg,desktop}-*", merge-multiple: true }
-      - name: Show what will be published
-        run: ls -la
+      - name: Gather the installers
+        # the installer artifacts keep their bundle folder names (dmg/, nsis/); the release wants plain files
+        run: |
+          find dmg nsis -type f \( -name '*.dmg' -o -name '*-setup.exe' \) -exec mv {} . \;
+          rmdir dmg nsis 2>/dev/null || true
+          ls -la
+          test "$(ls PowerDB_* | wc -l)" -ge 3 || { echo "expected two .dmg files and one setup .exe"; exit 1; }
       - name: Checksums
         run: sha256sum powerdb-* PowerDB_* > SHA256SUMS
       # A signed statement, from GitHub, that these exact files were built by this workflow from this commit.
