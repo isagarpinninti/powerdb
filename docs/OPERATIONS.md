@@ -48,7 +48,14 @@ A backup directory is not itself encrypted at rest beyond what the encrypted col
 `powerdb status` (liveness), `powerdb check` (re-hashes all chunks, recomputes reference counts; `--quick` skips chunk hashing).
 
 ## Upgrades
-Stop, back up, replace the binary, start. The data directory records its layout version in `FORMAT`: a binary refuses (without touching anything) a directory written by a newer layout. Today there is only layout 1, so there are no migrations yet; keep the backup until `powerdb check` passes on the new version.
+Stop, back up, replace the binary, start. Check `powerdb check` and keep the backup until you are satisfied.
+
+The data directory records its layout version in `FORMAT`. A binary refuses, without touching anything, a directory written
+by a newer layout. A directory written by an older layout is upgraded in place, one step at a time: the metadata (`meta/`) is
+first copied to `pre-migration-v<N>/` (the blob log is append-only and never rewritten, so it is not copied), `FORMAT` is
+rewritten after each completed step, and a failed step stops there and names the copy, so the next start resumes.
+There is only layout 1 so far, so no upgrade has ever run on real data; the machinery is tested with injected steps.
+Delete `pre-migration-v<N>/` once you no longer need it.
 
 ## Durability
 `--durability commit` (default, fsync per commit, ~333 commits/s measured on one Mac), `interval` (background fsync), `never` (tests only).

@@ -68,6 +68,28 @@ jobs:
           done
           curl -fsS -H "authorization: Bearer $KEY" http://127.0.0.1:8090/api/v1/collections | grep -q '"name":"t"'
           docker exec pdb powerdb --version
+      - name: Bind-mounted data folders (root-owned, and a specific non-root user)
+        run: |
+          set -eu
+          wait_healthy() {
+            for i in $(seq 1 30); do
+              [ "$(docker inspect -f '{{.State.Health.Status}}' "$1")" = healthy ] && return 0
+              sleep 2
+            done
+            docker logs "$1"; return 1
+          }
+          # 1. a folder owned by root: the entrypoint hands it to the unprivileged user
+          sudo mkdir -p "$RUNNER_TEMP/bind-root" && sudo chown root:root "$RUNNER_TEMP/bind-root"
+          docker run -d --name bind-root -v "$RUNNER_TEMP/bind-root:/data" powerdb:ci
+          wait_healthy bind-root
+          [ "$(stat -c %u "$RUNNER_TEMP/bind-root/FORMAT")" = 10001 ] || { echo "data not owned by the powerdb user"; ls -ln "$RUNNER_TEMP/bind-root"; exit 1; }
+          docker stop -t 30 bind-root
+          # 2. started as a specific user, with a folder that user owns (the way many deployments run)
+          mkdir -p "$RUNNER_TEMP/bind-user"
+          docker run -d --name bind-user --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP/bind-user:/data" powerdb:ci
+          wait_healthy bind-user
+          [ "$(stat -c %u "$RUNNER_TEMP/bind-user/FORMAT")" = "$(id -u)" ] || { echo "data not owned by the requested user"; exit 1; }
+          docker stop -t 30 bind-user
   service:
     # Installs PowerDB as a real operating-system service and drives its whole life cycle.
     strategy:
