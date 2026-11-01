@@ -94,10 +94,15 @@ impl Db {
 
     /// Compacts every sealed segment whose dead bytes are at least `min_dead_ratio` of its size (0.0 compacts all sealed segments).
     pub fn compact(&self, min_dead_ratio: f64) -> Result<CompactStats> {
+        let _m = self.inner.maint.lock().unwrap_or_else(|e| e.into_inner()); // not while a backup is copying segments
         let mut total = CompactStats::default();
         let active = self.inner.log.active_id();
         for seg in self.inner.log.segment_ids()? {
             if seg == active {
+                continue;
+            }
+            // An upload still being staged has chunks here that only it knows about; the segment is sealed, so it cannot gain more.
+            if self.inner.log.has_staged(seg) {
                 continue;
             }
             let len = self.inner.log.segment_len(seg)?;

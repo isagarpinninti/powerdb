@@ -747,3 +747,36 @@ fn dropping_the_database_releases_the_directory_at_once_even_with_a_busy_syncer(
         drop(db);
     }
 }
+
+#[test]
+fn compaction_never_deletes_the_segment_of_an_upload_that_is_still_being_staged() {
+    let d = Dir::new();
+    let db = open(&d);
+    let mine = data(900_000, 7);
+    let staged = stage(&db, &mine); // in the log, pinned, not yet in any record
+    // other work fills and seals the segment the staged chunks live in
+    for i in 0..8 {
+        let other = data(900_000, 100 + i);
+        db.create(
+            "invoices",
+            fields("other", i as i64),
+            vec![("document".into(), stage(&db, &other))],
+        )
+        .unwrap();
+    }
+    db.collect(0.0).unwrap(); // compacts every sealed segment, the one holding the staged chunks included
+    let rec = db
+        .create(
+            "invoices",
+            fields("mine", 1),
+            vec![("document".into(), staged)],
+        )
+        .unwrap();
+    assert_eq!(
+        read(&db, &rec, "document"),
+        mine,
+        "the staged file was lost to compaction"
+    );
+    let report = db.verify(true).unwrap();
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+}

@@ -5,6 +5,7 @@ pub mod chunker;
 pub mod gc;
 pub mod model;
 pub mod segment;
+pub mod snapshot;
 pub mod verify;
 
 use crate::error::{Error, Result};
@@ -90,6 +91,9 @@ pub(crate) struct Spaces {
 }
 
 pub(crate) struct Inner {
+    pub dir: std::path::PathBuf,
+    /// Held while a backup runs and while compaction rewrites or deletes segments: the two must not overlap.
+    pub maint: Mutex<()>,
     /// Holds the data directory's exclusive lock for as long as this database is open.
     pub _lock: std::fs::File,
     pub store: Database,
@@ -193,6 +197,8 @@ impl PendingFile {
 struct PinGuard {
     inner: Arc<Inner>,
     keys: Vec<[u8; 32]>,
+    /// The segment of each chunk this upload appended, released together with the pins.
+    staged_segments: Vec<u32>,
 }
 impl PinGuard {
     fn pin(&mut self, key: [u8; 32]) {
@@ -211,6 +217,11 @@ impl Drop for PinGuard {
                     p.remove(k);
                 }
             }
+        }
+        drop(p);
+        // After the pins: by now a committed upload's chunks are in the index, so compaction may look at the segment again.
+        for seg in &self.staged_segments {
+            self.inner.log.release_staged(*seg);
         }
     }
 }
@@ -318,6 +329,8 @@ impl Db {
             None
         };
         let inner = Arc::new(Inner {
+            dir: path.to_path_buf(),
+            maint: Mutex::new(()),
             _lock: lock,
             store,
             ks,
@@ -359,6 +372,11 @@ impl Db {
     }
 
     /// Another keyspace in the same database, for modules (accounts, keys) that keep their own records beside the collections.
+    /// The data directory this database was opened on.
+    pub fn data_dir(&self) -> &Path {
+        &self.inner.dir
+    }
+
     pub fn keyspace(&self, name: &str) -> Result<Keyspace> {
         Ok(self
             .inner
@@ -472,6 +490,7 @@ impl Db {
         let mut guard = PinGuard {
             inner: self.inner.clone(),
             keys: Vec::new(),
+            staged_segments: Vec::new(),
         };
         let mut chunks: Vec<([u8; 32], u32)> = Vec::new();
         let mut new_ptrs: HashMap<[u8; 32], ChunkPtr> = HashMap::new();
@@ -490,7 +509,8 @@ impl Db {
             let ptr = self
                 .inner
                 .log
-                .append(&key, data.len() as u32, flags, &stored)?;
+                .append_staged(&key, data.len() as u32, flags, &stored)?;
+            guard.staged_segments.push(ptr.seg); // released when the guard drops, even if this function fails below
             new_ptrs.insert(key, ptr);
         }
         if self.inner.opts.durability == Durability::Commit && !new_ptrs.is_empty() {

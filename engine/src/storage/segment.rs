@@ -78,9 +78,12 @@ pub struct SegmentLog {
     max_bytes: u64,
     active: Mutex<Active>,
     readers: RwLock<HashMap<u32, Arc<File>>>,
+    /// Chunks written for uploads that have not committed yet, per segment. Their locations exist only in memory until the
+    /// commit, so compaction (which keeps what the index points at) would delete them; it skips a segment with any.
+    staged: Mutex<HashMap<u32, u32>>,
 }
 
-fn seg_path(dir: &Path, id: u32) -> PathBuf {
+pub(crate) fn seg_path(dir: &Path, id: u32) -> PathBuf {
     dir.join(format!("seg-{id:06}.pdb"))
 }
 
@@ -170,6 +173,7 @@ impl SegmentLog {
                 len: good,
             }),
             readers: RwLock::new(readers),
+            staged: Mutex::new(HashMap::new()),
         })
     }
 
@@ -210,6 +214,47 @@ impl SegmentLog {
         flags: u8,
         payload: &[u8],
     ) -> Result<ChunkPtr> {
+        self.append_entry(key, raw_len, flags, payload, false)
+    }
+
+    /// Like `append`, for a chunk whose location nothing but the caller knows yet. It is registered as staged under the
+    /// same lock that decides when a segment is sealed, so there is no moment at which the segment looks sealed and unstaged.
+    /// Release it with `release_staged` once the chunk is in the index (or abandoned).
+    pub fn append_staged(
+        &self,
+        key: &[u8; 32],
+        raw_len: u32,
+        flags: u8,
+        payload: &[u8],
+    ) -> Result<ChunkPtr> {
+        self.append_entry(key, raw_len, flags, payload, true)
+    }
+
+    pub fn release_staged(&self, seg: u32) {
+        let mut m = self.staged.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = m.get_mut(&seg) {
+            *n -= 1;
+            if *n == 0 {
+                m.remove(&seg);
+            }
+        }
+    }
+
+    pub fn has_staged(&self, seg: u32) -> bool {
+        self.staged
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&seg)
+    }
+
+    fn append_entry(
+        &self,
+        key: &[u8; 32],
+        raw_len: u32,
+        flags: u8,
+        payload: &[u8],
+        staged: bool,
+    ) -> Result<ChunkPtr> {
         if payload.len() > u32::MAX as usize {
             return Err(Error::Invalid("a chunk cannot exceed 4 GiB".into()));
         }
@@ -243,6 +288,14 @@ impl SegmentLog {
         let off = a.len;
         write_all_at(&a.file, &buf, off)?;
         a.len += entry;
+        if staged {
+            *self
+                .staged
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(a.id)
+                .or_insert(0) += 1;
+        }
         self.sync_state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -331,6 +384,43 @@ impl SegmentLog {
     pub fn scan(&self, seg: u32, visit: impl FnMut(ScannedEntry) -> Result<()>) -> Result<u64> {
         let f = self.reader(seg)?;
         scan_file(&f, seg, visit)
+    }
+
+    /// Every segment with the length that counts whole, fully written entries right now. The active segment's length
+    /// comes from the append bookkeeping, not the file system, so an entry being written at this instant is not counted.
+    pub fn lengths(&self) -> Result<Vec<(u32, u64)>> {
+        let (active, active_len) = {
+            let a = self.active.lock().unwrap_or_else(|e| e.into_inner());
+            (a.id, a.len)
+        };
+        let mut out = Vec::new();
+        for id in self.segment_ids()? {
+            if id < active {
+                out.push((id, self.segment_len(id)?));
+            } else if id == active {
+                out.push((id, active_len));
+            } // a segment opened after the lock was taken holds only newer data
+        }
+        Ok(out)
+    }
+
+    /// Copies the first `len` bytes of a segment to `to`, durably.
+    pub fn copy_prefix(&self, id: u32, len: u64, to: &Path) -> Result<()> {
+        let src = self.reader(id)?;
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut out = File::create(to)?;
+        let mut buf = vec![0u8; 1 << 20];
+        let mut off = 0u64;
+        while off < len {
+            let n = (len - off).min(buf.len() as u64) as usize;
+            read_exact_at(&src, &mut buf[..n], off)?;
+            std::io::Write::write_all(&mut out, &buf[..n])?;
+            off += n as u64;
+        }
+        out.sync_all()?;
+        Ok(())
     }
 
     /// Deletes a sealed segment. Readers that already hold the file keep working (the data stays until they let go).
