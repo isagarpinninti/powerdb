@@ -320,7 +320,7 @@ pub fn run_as_service(
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
     use windows_service::service::{
-        ServiceControl, ServiceControlAccepted, ServiceExitCode, ServiceState, ServiceStatus,
+        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
         ServiceType,
     };
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
@@ -361,13 +361,13 @@ pub fn run_as_service(
         };
         report(
             ServiceState::StartPending,
-            ServiceControlAccepted::empty(),
+            ServiceControlAccept::empty(),
             0,
             Duration::from_secs(10),
         );
         report(
             ServiceState::Running,
-            ServiceControlAccepted::STOP | ServiceControlAccepted::SHUTDOWN,
+            ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
             0,
             Duration::default(),
         );
@@ -390,7 +390,7 @@ pub fn run_as_service(
         };
         report(
             ServiceState::Stopped,
-            ServiceControlAccepted::empty(),
+            ServiceControlAccept::empty(),
             code,
             Duration::default(),
         );
