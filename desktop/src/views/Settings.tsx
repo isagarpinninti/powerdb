@@ -45,7 +45,7 @@ export function Settings() {
       <Section title="Data and security">
         <Card className="divide-y divide-line">
           <Row label="Data folder" hint={<span className="font-mono">{snap.config.data_dir}</span>}><Button small onClick={() => revealItemInDir(snap.config.data_dir).catch(() => {})}>Show in {fileManager(snap.platform)}</Button></Row>
-          <Row label="Administrator key" hint="Stored in your system's credential store. It signs this app in to the dashboard."><Button small onClick={async () => setKey(await api.revealKey())}>Reveal…</Button></Row>
+          <Row label="Administrator key" hint="Stored in your system's credential store. It signs this app in to the dashboard."><Button small onClick={async () => { try { setKey(await api.revealKey()); } catch (e) { setError(errorText(e)); } }}>Reveal…</Button></Row>
         </Card>
       </Section>
       {key !== undefined && key !== null && (

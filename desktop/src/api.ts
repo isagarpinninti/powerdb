@@ -36,7 +36,7 @@ export const api = {
   check: (quick: boolean) => invoke<string>('run_check', { quick }),
   restore: (name: string, target: string) => invoke<string>('restore_backup', { name, target }),
   useDatabase: (dataDir: string) => invoke<void>('use_database', { dataDir }),
-  revealKey: () => invoke<string | null>('reveal_key'),
+  revealKey: () => invoke<string>('reveal_key'),
 };
 
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : typeof e === 'string' ? e : JSON.stringify(e));

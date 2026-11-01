@@ -19,7 +19,36 @@ fn server_binary() -> PathBuf {
         return PathBuf::from(p);
     }
     let exe = std::env::current_exe().unwrap_or_default();
-    exe.parent().unwrap_or_else(|| std::path::Path::new(".")).join(if cfg!(windows) { "powerdb.exe" } else { "powerdb" })
+    exe.parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(if cfg!(windows) {
+            "powerdb.exe"
+        } else {
+            "powerdb"
+        })
+}
+
+/// Appends a line to `frontend.log` in the app's settings folder (kept small), and to stderr.
+pub fn ui_log(app: &AppHandle, line: &str) {
+    eprintln!("{line}");
+    if let Ok(dir) = app.path().app_config_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("frontend.log");
+        if std::fs::metadata(&path)
+            .map(|m| m.len() > 200_000)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::rename(&path, dir.join("frontend.log.1"));
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
 }
 
 struct TrayItems {
@@ -42,8 +71,14 @@ fn update_tray(app: &AppHandle, s: &Status) {
     if let Some(t) = app.try_state::<TrayItems>() {
         let _ = t.status.set_text(phase_label(s));
         let running = matches!(s.phase, Phase::Running | Phase::Starting);
-        let _ = t.toggle.set_text(if running { "Stop Server" } else { "Start Server" });
-        let _ = t.toggle.set_enabled(!matches!(s.phase, Phase::Starting | Phase::Stopping));
+        let _ = t.toggle.set_text(if running {
+            "Stop Server"
+        } else {
+            "Start Server"
+        });
+        let _ = t
+            .toggle
+            .set_enabled(!matches!(s.phase, Phase::Starting | Phase::Stopping));
         let _ = t.dashboard.set_enabled(s.phase == Phase::Running);
     }
 }
@@ -59,8 +94,13 @@ fn show_main(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app)
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -77,17 +117,44 @@ pub fn run() {
                     let _ = emit_handle.emit("server-log", l);
                 }
             });
-            let state = AppState { manager, config: Mutex::new(cfg.clone()), config_dir, binary: server_binary() };
+            let state = AppState {
+                manager,
+                config: Mutex::new(cfg.clone()),
+                config_dir,
+                binary: server_binary(),
+                keys: Default::default(),
+            };
 
             // tray
-            let status_item = MenuItem::with_id(app, "status", "Server stopped", false, None::<&str>)?;
+            let status_item =
+                MenuItem::with_id(app, "status", "Server stopped", false, None::<&str>)?;
             let toggle = MenuItem::with_id(app, "toggle", "Start Server", true, None::<&str>)?;
-            let dashboard = MenuItem::with_id(app, "dashboard", "Open Dashboard", false, None::<&str>)?;
-            let manager_item = MenuItem::with_id(app, "manager", "Open PowerDB Manager", true, None::<&str>)?;
+            let dashboard =
+                MenuItem::with_id(app, "dashboard", "Open Dashboard", false, None::<&str>)?;
+            let manager_item =
+                MenuItem::with_id(app, "manager", "Open PowerDB Manager", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit PowerDB", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&status_item, &PredefinedMenuItem::separator(app)?, &toggle, &dashboard, &manager_item, &PredefinedMenuItem::separator(app)?, &quit])?;
-            app.manage(TrayItems { status: status_item, toggle, dashboard });
-            let mut tray = TrayIconBuilder::with_id("main").menu(&menu).tooltip("PowerDB").show_menu_on_left_click(true);
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &status_item,
+                    &PredefinedMenuItem::separator(app)?,
+                    &toggle,
+                    &dashboard,
+                    &manager_item,
+                    &PredefinedMenuItem::separator(app)?,
+                    &quit,
+                ],
+            )?;
+            app.manage(TrayItems {
+                status: status_item,
+                toggle,
+                dashboard,
+            });
+            let mut tray = TrayIconBuilder::with_id("main")
+                .menu(&menu)
+                .tooltip("PowerDB")
+                .show_menu_on_left_click(true);
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
@@ -105,7 +172,9 @@ pub fn run() {
                     tauri::async_runtime::spawn_blocking(move || {
                         let st = app.state::<AppState>();
                         match st.manager.status().phase {
-                            Phase::Running | Phase::Starting => st.manager.stop(Duration::from_secs(30)),
+                            Phase::Running | Phase::Starting => {
+                                st.manager.stop(Duration::from_secs(30))
+                            }
                             _ => {
                                 let _ = st.start();
                             }
@@ -126,6 +195,12 @@ pub fn run() {
                 show_main(&handle);
             }
             Ok(())
+        })
+        .on_page_load(|webview, payload| {
+            ui_log(
+                webview.app_handle(),
+                &format!("page {:?}: {}", payload.event(), payload.url()),
+            );
         })
         .on_window_event(|window, event| {
             // Closing the Manager window leaves the server running in the tray, as a database server should.
@@ -153,6 +228,7 @@ pub fn run() {
             commands::restore_backup,
             commands::use_database,
             commands::reveal_key,
+            commands::frontend_log,
         ])
         .build(tauri::generate_context!())
         .expect("error while building PowerDB");

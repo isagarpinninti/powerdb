@@ -60,7 +60,10 @@ pub struct Manager {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Runs a helper process without flashing a console window on Windows.
@@ -77,7 +80,12 @@ impl Manager {
     pub fn new(emit: impl Fn(Event) + Send + Sync + 'static) -> Self {
         Manager {
             inner: Arc::new(Mutex::new(Inner {
-                status: Status { phase: Phase::Stopped, pid: None, since: None, message: None },
+                status: Status {
+                    phase: Phase::Stopped,
+                    pid: None,
+                    since: None,
+                    message: None,
+                },
                 child: None,
                 logs: VecDeque::new(),
                 generation: 0,
@@ -87,11 +95,21 @@ impl Manager {
     }
 
     pub fn status(&self) -> Status {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).status.clone()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .status
+            .clone()
     }
 
     pub fn logs(&self) -> Vec<String> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).logs.iter().cloned().collect()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .logs
+            .iter()
+            .cloned()
+            .collect()
     }
 
     fn set(&self, generation: u64, f: impl FnOnce(&mut Status)) {
@@ -120,14 +138,20 @@ impl Manager {
     pub fn start(&self, l: &Launch) -> Result<(), String> {
         let generation = {
             let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if matches!(g.status.phase, Phase::Starting | Phase::Running | Phase::Stopping) {
+            if matches!(
+                g.status.phase,
+                Phase::Starting | Phase::Running | Phase::Stopping
+            ) {
                 return Err("the server is already running".into());
             }
             g.generation += 1;
             g.generation
         };
         if api::healthy(l.port) {
-            return Err(format!("something is already answering on port {} (another PowerDB, or another program); choose a different port", l.port));
+            return Err(format!(
+                "something is already answering on port {} (another PowerDB, or another program); choose a different port",
+                l.port
+            ));
         }
         let mut cmd = Command::new(&l.binary);
         cmd.arg("serve")
@@ -140,9 +164,23 @@ impl Manager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         quiet(&mut cmd);
-        let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", l.binary.display()))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("cannot start {}: {e}", l.binary.display()))?;
         let pid = child.id();
-        for stream in [child.stdout.take().map(|s| Box::new(s) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|s| Box::new(s) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
+        for stream in [
+            child
+                .stdout
+                .take()
+                .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+            child
+                .stderr
+                .take()
+                .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        {
             let m = self.clone();
             std::thread::spawn(move || {
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
@@ -153,7 +191,12 @@ impl Manager {
         {
             let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             g.child = Some(child);
-            g.status = Status { phase: Phase::Starting, pid: Some(pid), since: None, message: None };
+            g.status = Status {
+                phase: Phase::Starting,
+                pid: Some(pid),
+                since: None,
+                message: None,
+            };
         }
         (self.emit)(Event::Status(self.status()));
         let m = self.clone();
@@ -181,7 +224,15 @@ impl Manager {
             };
             if let Some(code) = exited {
                 let stopping = self.status().phase == Phase::Stopping;
-                let tail: Vec<String> = self.logs().into_iter().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
+                let tail: Vec<String> = self
+                    .logs()
+                    .into_iter()
+                    .rev()
+                    .take(6)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
                 self.set(generation, |s| {
                     s.pid = None;
                     s.since = None;
@@ -190,7 +241,10 @@ impl Manager {
                         s.message = None;
                     } else {
                         s.phase = Phase::Failed;
-                        s.message = Some(format!("the server exited unexpectedly ({code}). {}", tail.join(" | ")));
+                        s.message = Some(format!(
+                            "the server exited unexpectedly ({code}). {}",
+                            tail.join(" | ")
+                        ));
                     }
                 });
                 return;
@@ -205,7 +259,8 @@ impl Manager {
                 } else if began.elapsed() > Duration::from_secs(45) {
                     self.set(generation, |s| {
                         s.phase = Phase::Failed;
-                        s.message = Some("the server did not become ready within 45 seconds".into());
+                        s.message =
+                            Some("the server did not become ready within 45 seconds".into());
                     });
                     self.kill();
                     return;
@@ -238,7 +293,13 @@ impl Manager {
         self.set(generation, |s| s.phase = Phase::Stopping);
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
-            if self.inner.lock().unwrap_or_else(|e| e.into_inner()).child.is_none() {
+            if self
+                .inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .child
+                .is_none()
+            {
                 return;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -246,7 +307,14 @@ impl Manager {
         self.log("the server did not stop in time and was ended".into());
         self.kill();
         let until = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < until && self.inner.lock().unwrap_or_else(|e| e.into_inner()).child.is_some() {
+        while Instant::now() < until
+            && self
+                .inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .child
+                .is_some()
+        {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
@@ -275,6 +343,9 @@ mod tests {
 
     #[test]
     fn terminal_colour_codes_are_removed_from_log_lines() {
-        assert_eq!(strip_ansi("\u{1b}[2m2026\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m hello"), "2026  INFO hello");
+        assert_eq!(
+            strip_ansi("\u{1b}[2m2026\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m hello"),
+            "2026  INFO hello"
+        );
     }
 }

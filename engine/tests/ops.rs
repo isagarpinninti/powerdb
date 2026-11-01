@@ -531,3 +531,56 @@ fn an_online_backup_refuses_an_existing_destination_and_leaves_the_secret_out_by
         "the lock file is not part of a backup"
     );
 }
+
+#[test]
+fn a_server_whose_log_pipe_has_vanished_still_shuts_down_cleanly() {
+    // The desktop app starts the server with its stdout and stderr piped. If the app crashes, those pipes break; the server
+    // must still see its stdin close and finish properly (exit status 0), not panic while logging that it is shutting down.
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let d = Dir::new("pipe");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_powerdb"))
+        .args([
+            "serve",
+            "--shutdown-on-stdin-close",
+            "--addr",
+            "127.0.0.1:0",
+            "--data",
+        ])
+        .arg(&d.0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // wait until it says it is listening, so the next log line it writes is the shutdown one
+    let mut err = child.stderr.take().unwrap();
+    let mut seen = String::new();
+    let mut buf = [0u8; 4096];
+    while !seen.contains("listening") {
+        let n = err.read(&mut buf).unwrap();
+        assert!(n > 0, "the server exited before listening: {seen}");
+        seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    drop(err); // the reader is gone: writes to stderr now fail with a broken pipe
+    drop(child.stdout.take());
+    drop(child.stdin.take()); // ask it to stop
+    // wait for it, but not for ever: a server that ignores the request is exactly the failure this test is about
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        if std::time::Instant::now() > until {
+            let _ = child.kill();
+            panic!(
+                "the server did not shut down within 20 s after its log pipe broke and its stdin closed"
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(
+        status.success(),
+        "the server must exit cleanly when its log pipe is broken, got {status}"
+    );
+}

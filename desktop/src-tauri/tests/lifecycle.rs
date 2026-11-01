@@ -13,23 +13,49 @@ fn binary() -> PathBuf {
     if let Some(p) = std::env::var_os("POWERDB_BIN") {
         return PathBuf::from(p);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release").join(if cfg!(windows) { "powerdb.exe" } else { "powerdb" })
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/release")
+        .join(if cfg!(windows) {
+            "powerdb.exe"
+        } else {
+            "powerdb"
+        })
 }
 
 fn free_port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
+    TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 struct Data(PathBuf);
 impl Data {
     fn new() -> Data {
-        let d = std::env::temp_dir().join(format!("pdb-desktop-test-{}-{}", std::process::id(), free_port()));
-        let out = Command::new(binary()).arg("init").arg(&d).output().expect("powerdb must be built first: cargo build --release");
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let d = std::env::temp_dir().join(format!(
+            "pdb-desktop-test-{}-{}",
+            std::process::id(),
+            free_port()
+        ));
+        let out = Command::new(binary())
+            .arg("init")
+            .arg(&d)
+            .output()
+            .expect("powerdb must be built first: cargo build --release");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         Data(d)
     }
     fn launch(&self, port: u16) -> Launch {
-        Launch { binary: binary(), data: self.0.clone(), port }
+        Launch {
+            binary: binary(),
+            data: self.0.clone(),
+            port,
+        }
     }
 }
 impl Drop for Data {
@@ -60,11 +86,16 @@ fn wait_for(m: &Manager, want: Phase, secs: u64) {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    panic!("timed out waiting for {want:?}; status {:?}; log tail {:?}", m.status(), m.logs().iter().rev().take(5).collect::<Vec<_>>());
+    panic!(
+        "timed out waiting for {want:?}; status {:?}; log tail {:?}",
+        m.status(),
+        m.logs().iter().rev().take(5).collect::<Vec<_>>()
+    );
 }
 
 fn port_open(port: u16) -> bool {
-    std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(300)).is_ok()
+    std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(300))
+        .is_ok()
 }
 
 #[test]
@@ -75,14 +106,30 @@ fn start_run_stop_reports_every_step_and_frees_the_port() {
     wait_for(&m, Phase::Running, 30);
     assert!(powerdb_desktop_lib::api::healthy(port));
     assert!(m.status().pid.is_some() && m.status().since.is_some());
-    assert!(m.logs().iter().any(|l| l.contains("listening")), "the server's log is captured: {:?}", m.logs());
-    assert!(m.start(&data.launch(port)).is_err(), "starting twice is refused");
+    assert!(
+        m.logs().iter().any(|l| l.contains("listening")),
+        "the server's log is captured: {:?}",
+        m.logs()
+    );
+    assert!(
+        m.start(&data.launch(port)).is_err(),
+        "starting twice is refused"
+    );
     m.stop(Duration::from_secs(30));
     wait_for(&m, Phase::Stopped, 5);
     assert!(!port_open(port), "the port is released");
     m.stop(Duration::from_secs(1)); // stopping a stopped server is harmless
     let seen = phases.lock().unwrap().clone();
-    assert_eq!(seen, vec![Phase::Starting, Phase::Running, Phase::Stopping, Phase::Stopped], "{seen:?}");
+    assert_eq!(
+        seen,
+        vec![
+            Phase::Starting,
+            Phase::Running,
+            Phase::Stopping,
+            Phase::Stopped
+        ],
+        "{seen:?}"
+    );
 }
 
 #[test]
@@ -92,10 +139,23 @@ fn a_clean_stop_lets_the_server_finish_and_release_the_data_folder() {
     m.start(&data.launch(port)).unwrap();
     wait_for(&m, Phase::Running, 30);
     m.stop(Duration::from_secs(30));
-    assert!(m.logs().iter().any(|l| l.contains("shutting down")), "it shut down by itself, not by being killed: {:?}", m.logs());
+    assert!(
+        m.logs().iter().any(|l| l.contains("shutting down")),
+        "it shut down by itself, not by being killed: {:?}",
+        m.logs()
+    );
     // the folder's lock is free: an integrity check can open it
-    let out = Command::new(binary()).args(["check", "--quick", "--data"]).arg(&data.0).output().unwrap();
-    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(binary())
+        .args(["check", "--quick", "--data"])
+        .arg(&data.0)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -143,8 +203,15 @@ fn the_same_data_folder_cannot_be_served_twice() {
     wait_for(&m1, Phase::Running, 30);
     m2.start(&data.launch(p2)).unwrap();
     wait_for(&m2, Phase::Failed, 30);
-    assert!(m2.status().message.unwrap().contains("in use"), "the lock explains itself");
-    assert_eq!(m1.status().phase, Phase::Running, "the first server is unaffected");
+    assert!(
+        m2.status().message.unwrap().contains("in use"),
+        "the lock explains itself"
+    );
+    assert_eq!(
+        m1.status().phase,
+        Phase::Running,
+        "the first server is unaffected"
+    );
     m1.stop(Duration::from_secs(30));
 }
 
@@ -158,6 +225,8 @@ fn a_server_ended_from_outside_is_noticed() {
     #[cfg(unix)]
     let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
     #[cfg(windows)]
-    let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+    let _ = Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .output();
     wait_for(&m, Phase::Failed, 10);
 }

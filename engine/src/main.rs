@@ -10,6 +10,22 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Standard error for the log, which never fails. When the process that started the server goes away (the desktop app
+/// crashing, a terminal closing), the pipe behind stderr breaks; a failed write must not take the server down with it,
+/// least of all in the middle of shutting down and flushing the database.
+struct QuietStderr;
+
+impl std::io::Write for QuietStderr {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stderr().write(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stderr().flush();
+        Ok(())
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "powerdb",
@@ -206,7 +222,10 @@ async fn main() {
             .with_ansi(false)
             .with_writer(std::sync::Mutex::new(f))
             .init(),
-        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+        None => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(|| QuietStderr)
+            .init(),
     }
     let code = match cli.cmd {
         Cmd::Service { action } => service_command(action).await,

@@ -1,3 +1,4 @@
+import './boot';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
@@ -11,7 +12,7 @@ initTheme();
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ToastProvider>
-      <AppProvider fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+      <AppProvider fallback={<div className="flex h-full items-center justify-center gap-3 text-sm text-muted"><Spinner /> Starting PowerDB Manager…</div>}>
         <Shell />
       </AppProvider>
     </ToastProvider>
