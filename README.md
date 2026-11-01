@@ -6,15 +6,15 @@ Status: **in development.** What exists, what is tested and what is still to bui
 
 | Part | State |
 |---|---|
-| Storage engine (LSM metadata + content-defined chunk log, atomic commit, dedup, GC, compaction) | built, 18 tests, `powerdb bench` |
-| Security (chunk encryption, signed URLs, magic-byte checks, access rules, auth) | built, 17 tests |
-| HTTP API (CRUD, filter/sort/pagination, streaming uploads, ranged downloads, keys, throttling) | built, 15 tests over the real router, smoke-tested with curl |
-| TypeScript SDK | built, 7 tests against a real server process |
+| Storage engine (LSM metadata + content-defined chunk log, atomic commit, dedup, GC, compaction) | built, tested, `powerdb bench`; killed-writer crash test and a hot-backup stress test |
+| Security (chunk encryption, signed URLs, magic-byte checks, access rules, auth) | built, tested; fuzzed (rules language, upload checks, tokens, damaged storage, HTTP) |
+| HTTP API (CRUD, filter/sort/pagination, streaming uploads, ranged downloads, keys, throttling) | built, tested over the real router |
+| TypeScript SDK | built, tested against a real server process |
 | Dashboard (collections, schema builder, virtualized grid with image thumbnails, access-rule editor, code generator, users, keys) | built, embedded in the binary (5 MB); checked by eye in a browser, no automated UI tests |
 | OAuth2 sign-in (Google, GitHub) | not started |
 
 ```bash
-cargo test --release                      # 50 tests
+cargo test --release                      # the whole suite, about a minute
 cargo run --release -- bench              # engine numbers for this machine (add --sync or --interval)
 cargo run --release -- serve              # API and dashboard on 127.0.0.1:8090; the first run prints an admin key
 ```
@@ -29,4 +29,4 @@ Access is locked by default: a collection with no rule for an action can be used
 Known gaps: PDFs show a labelled tile rather than a rendered thumbnail (that needs a PDF renderer); OAuth2 sign-in (Google, GitHub) is not implemented; there are no automated browser tests for the dashboard.
 
 ## Install and operate
-See [docs/INSTALL.md](docs/INSTALL.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md). Packaging (Docker, systemd, launchd, Windows task, install scripts) and CI/release workflows are written but unverified outside macOS arm64 until CI runs.
+See [docs/INSTALL.md](docs/INSTALL.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md). The test suite runs in CI on Linux (x64, arm64), macOS (arm64, Intel) and Windows. The Dockerfile, install scripts, service files and the release workflow have never been run: no release has been tagged yet.

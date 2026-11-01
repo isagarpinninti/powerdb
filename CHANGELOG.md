@@ -14,4 +14,4 @@
 - Fix (data loss): compaction could delete the segment holding chunks of an upload still being staged, so the later commit indexed a missing file. Staged chunks are now tracked per segment and compaction skips those segments.
 - Dashboard fallback answers only GET/HEAD (was 200 to any method).
 - Fuzzing: deterministic in-process fuzzers for the rule language, upload type checks, stored formats, tokens, settings, damaged storage, tampered backups and the HTTP API; libFuzzer targets in `fuzz/`.
-- Packaging and CI written; verified on macOS arm64 only.
+- Packaging, CI and release workflows written. CI runs the tests on Linux, macOS and Windows; packaging and releases are unrun.

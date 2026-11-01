@@ -2,10 +2,9 @@
 
 PowerDB is one binary (`powerdb`, about 5 MB, dashboard embedded). Pick one.
 
-> **Verification status.** The code is built and tested on macOS arm64 only. The Linux, Windows and
-> macOS-Intel builds, `scripts/install.*`, the Dockerfile and the service files are written but
-> **have not been run**; the CI workflow (`.github/workflows/ci.yml`) exists to do that.
-> Treat each as unverified until its CI job is green.
+> **Verification status.** The test suite passes in CI on Linux (x64, arm64), macOS (arm64, Intel) and Windows.
+> The install scripts, the Dockerfile, the compose file, the service files and the release workflow **have not been run**:
+> no release exists yet, so treat each as unverified until you have run it.
 
 ## From a release (macOS, Linux)
 ```bash
