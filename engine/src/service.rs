@@ -3,11 +3,14 @@
 //! The text of the unit and the job description is produced by plain functions so it can be tested everywhere; the
 //! parts that talk to the service manager are per platform, and only the platform they are written for can run them.
 
+// Each operating system uses a different part of this module (a unit file, a launchd job, the Service Control
+// Manager), and the text generators are unit-tested on every platform, so some items are unused wherever you build.
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[allow(dead_code)] // the Windows service name; Linux and macOS use their own
 pub const NAME: &str = "PowerDB";
 pub const LABEL: &str = "com.powerdb.server";
 
@@ -43,7 +46,6 @@ fn xml(s: &str) -> String {
 
 /// A systemd unit. Without `run_as` the service uses a transient system user (`DynamicUser`) whose home is `/var/lib/powerdb`;
 /// that only works for the default data directory, so a different directory needs an explicit account that owns it.
-#[allow(dead_code)] // only installed on Linux, but tested everywhere
 pub fn systemd_unit(s: &Spec) -> String {
     let args = s.serve_args().join(" ");
     let account = match &s.run_as {
