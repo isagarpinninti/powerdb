@@ -43,6 +43,7 @@ tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["limit", "trace", "set-header", "compression-gzip", "cors"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [dev-dependencies]
 http-body-util = "0.1.5"

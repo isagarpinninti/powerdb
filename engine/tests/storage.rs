@@ -807,3 +807,48 @@ fn a_damaged_manifest_size_is_corruption_not_a_giant_allocation() {
         "the checker must notice it too"
     );
 }
+
+#[test]
+fn a_damaged_metadata_version_file_is_refused_with_a_clear_error_before_the_library_reads_it() {
+    let d = Dir::new();
+    drop(open(&d));
+    let ks = std::fs::read_dir(d.0.join("meta/keyspaces"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let current = std::fs::read(ks.join("current")).unwrap();
+    let id = u64::from_le_bytes(current[0..8].try_into().unwrap());
+    let file = ks.join(format!("v{id}"));
+    let original = std::fs::read(&file).unwrap();
+    // the library sizes an allocation from a count inside this file; before the check, one flipped byte aborted the process
+    let mut bad = original.clone();
+    let at = bad.len() - 9;
+    bad[at] ^= 0x40;
+    std::fs::write(&file, &bad).unwrap();
+    let err = Db::open(&d.0, small_opts())
+        .map(|_| ())
+        .expect_err("damaged metadata must be refused");
+    assert!(
+        matches!(err, powerdb::Error::Corrupt(_))
+            && err.to_string().contains("Restore from a backup"),
+        "{err}"
+    );
+    // a malformed pointer and a missing version file are refused the same way
+    std::fs::write(&file, &original).unwrap();
+    std::fs::write(ks.join("current"), b"short").unwrap();
+    assert!(matches!(
+        Db::open(&d.0, small_opts()).map(|_| ()),
+        Err(powerdb::Error::Corrupt(_))
+    ));
+    std::fs::write(ks.join("current"), &current).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    assert!(matches!(
+        Db::open(&d.0, small_opts()).map(|_| ()),
+        Err(powerdb::Error::Corrupt(_))
+    ));
+    // and the undamaged directory still opens
+    std::fs::write(&file, &original).unwrap();
+    drop(Db::open(&d.0, small_opts()).unwrap());
+}

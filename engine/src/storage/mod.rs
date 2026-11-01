@@ -234,6 +234,49 @@ pub struct Stats {
     pub gc_pending: u64,
 }
 
+/// Checks the metadata store's version files against their recorded checksums, before the storage library reads them.
+///
+/// The library parses a keyspace's current version file and sizes allocations from counts inside it without checking the
+/// checksum its `current` file records (an upstream TODO), so one damaged byte can make it request tens of gigabytes and
+/// abort the process. This turns that into an ordinary error that says what to do. Only the file `current` names is
+/// checked: older `v*` files are leftovers nothing reads. A pristine directory always passes, which every test that
+/// opens a database exercises, so a library upgrade that changes the format fails loudly instead of locking anyone out.
+fn check_meta_files(meta: &Path) -> Result<()> {
+    let keyspaces = meta.join("keyspaces");
+    let entries = match std::fs::read_dir(&keyspaces) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let dir = entry?.path();
+        let current = match std::fs::read(dir.join("current")) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let damaged = |what: String| {
+            Error::Corrupt(format!(
+                "{}: {what}; the metadata store is damaged. Restore from a backup (powerdb restore)",
+                dir.display()
+            ))
+        };
+        if current.len() != 25 || current[24] != 0 {
+            return Err(damaged("the version pointer is malformed".into()));
+        }
+        let id = u64::from_le_bytes(current[0..8].try_into().unwrap_or_default());
+        let want = u128::from_le_bytes(current[8..24].try_into().unwrap_or_default());
+        let file = std::fs::read(dir.join(format!("v{id}")))
+            .map_err(|e| damaged(format!("version file v{id} cannot be read ({e})")))?;
+        if xxhash_rust::xxh3::xxh3_128(&file) != want {
+            return Err(damaged(format!(
+                "version file v{id} does not match its checksum"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Version of the on-disk layout. Bump it, and add an upgrade step in `check_format`, whenever a change would make older data unreadable.
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -293,6 +336,7 @@ impl Db {
             Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
         check_format(path)?;
+        check_meta_files(&path.join("meta"))?;
         let mut b = Database::builder(path.join("meta"));
         if let Some(c) = opts.cache_bytes {
             b = b.cache_size(c);

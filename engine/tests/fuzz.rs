@@ -27,6 +27,48 @@ use tower::ServiceExt;
 
 // ---- harness ----
 
+/// Refuses any single allocation over 1 GiB, and says who asked and for what input before aborting.
+/// Linux refuses absurd allocations at once (the process aborts), while macOS grants the address space lazily, so without
+/// this a decoder that trusts a damaged length passes on one and kills the process on the other.
+struct HugeAllocGuard;
+
+unsafe impl std::alloc::GlobalAlloc for HugeAllocGuard {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        if l.size() > 1 << 30 {
+            let input = INPUT
+                .try_with(|c| c.try_borrow().map(|s| s.clone()).unwrap_or_default())
+                .unwrap_or_default();
+            eprintln!(
+                "\nHUGE ALLOCATION: {} bytes requested\n  input: {input}\n{}",
+                l.size(),
+                std::backtrace::Backtrace::force_capture()
+            );
+            std::process::abort();
+        }
+        unsafe { std::alloc::System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(p, l) }
+    }
+    unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
+        if l.size() > 1 << 30 {
+            return unsafe { self.alloc(l) };
+        }
+        unsafe { std::alloc::System.alloc_zeroed(l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 {
+        if n > 1 << 30 {
+            return unsafe {
+                self.alloc(std::alloc::Layout::from_size_align_unchecked(n, l.align()))
+            };
+        }
+        unsafe { std::alloc::System.realloc(p, l, n) }
+    }
+}
+
+#[global_allocator]
+static GUARD: HugeAllocGuard = HugeAllocGuard;
+
 struct Rng(u64);
 impl Rng {
     fn new(seed: u64, i: u64) -> Self {
@@ -656,6 +698,7 @@ fn damaged_storage_fails_loudly_and_never_returns_wrong_data() {
     let mut targets = vec![];
     files_under(&pristine.0, &mut targets);
     targets.retain(|p| !p.ends_with("secret.key"));
+    targets.sort(); // read_dir order differs between file systems; the same iteration must pick the same file everywhere
     run(
         "damaged_storage_fails_loudly_and_never_returns_wrong_data",
         150,
