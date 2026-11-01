@@ -1,0 +1,34 @@
+name: fuzz
+on:
+  schedule: [{ cron: "41 3 * * 0" }]
+  workflow_dispatch:
+    inputs:
+      seconds: { description: "seconds per target", default: "300" }
+permissions: { contents: read }
+jobs:
+  libfuzzer:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: { target: [expr, magic, manifest, settings] }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with: { toolchain: nightly }
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz
+        run: cargo fuzz run --fuzz-dir ../fuzz ${{ matrix.target }} -- -max_total_time=${{ inputs.seconds || 300 }}
+        working-directory: engine
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+  long-deterministic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with: { toolchain: stable }
+      - name: Long deterministic fuzz with a fresh seed each week
+        run: POWERDB_FUZZ_SEED=$(date +%s) POWERDB_FUZZ_ITERS=300000 cargo test --release --test fuzz -- --skip damaged_storage --skip a_tampered --skip random_http

@@ -10,4 +10,8 @@
 - Crash test: a committing writer is killed repeatedly; acknowledged writes survive.
 - Prometheus `/api/v1/metrics` (admin only).
 - Fix: the lock could outlive `drop(db)` while the fsync thread finished (found by CI on macOS Intel).
+- Online (hot) backup: API, SDK, dashboard button; consistent point-in-time copy, self-verified; `backup_dir` setting.
+- Fix (data loss): compaction could delete the segment holding chunks of an upload still being staged, so the later commit indexed a missing file. Staged chunks are now tracked per segment and compaction skips those segments.
+- Dashboard fallback answers only GET/HEAD (was 200 to any method).
+- Fuzzing: deterministic in-process fuzzers for the rule language, upload type checks, stored formats, tokens, settings, damaged storage, tampered backups and the HTTP API; libFuzzer targets in `fuzz/`.
 - Packaging and CI written; verified on macOS arm64 only.

@@ -11,7 +11,15 @@ struct Assets;
 
 const CSP: &str = "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
-pub async fn serve(uri: Uri) -> Response {
+pub async fn serve(method: axum::http::Method, uri: Uri) -> Response {
+    // Static files are read-only: any other method is a mistake or a probe, not a request the page can answer.
+    if method != axum::http::Method::GET && method != axum::http::Method::HEAD {
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .header(header::ALLOW, "GET, HEAD")
+            .body(Body::empty())
+            .unwrap_or_default();
+    }
     let path = uri.path().trim_start_matches('/');
     if path.starts_with("api/") {
         return Response::builder()

@@ -24,6 +24,8 @@ pub struct FileConfig {
     /// PEM certificate chain and private key; both or neither. Relative paths are relative to the data directory.
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
+    /// Where online backups go (default `backups` inside the data directory). Put it on another disk.
+    pub backup_dir: Option<PathBuf>,
 }
 
 /// What the command line (and environment) said. `None` or `false` means "not given", so the file may decide.
@@ -95,6 +97,7 @@ impl Settings {
             trust_proxy: cli.trust_proxy || file.trust_proxy.unwrap_or(false),
             cors_origins: cors,
             max_upload_bytes: cli.max_upload_gib.or(file.max_upload_gib).unwrap_or(5) << 30,
+            backup_dir: file.backup_dir.clone(),
             ..ApiConfig::default()
         };
         let tls = match (cli.tls_cert.or(file.tls_cert), cli.tls_key.or(file.tls_key)) {
@@ -150,6 +153,9 @@ max_upload_gib = 5
 # The files are re-read every hour, so a renewed certificate takes effect without a restart.
 # tls_cert = "cert.pem"
 # tls_key = "key.pem"
+
+# Where online backups (POST /api/v1/maintenance/backups) are written. Relative: inside this directory. Use another disk.
+# backup_dir = "backups"
 "#;
 
 pub fn data_dir_default() -> PathBuf {

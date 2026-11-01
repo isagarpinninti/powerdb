@@ -17,11 +17,29 @@ Never expose plain HTTP beyond localhost: bearer tokens travel in headers. `powe
 Order: flags > environment (`POWERDB_*`) > `powerdb.toml` in the data dir > defaults. Unknown keys in the file are errors.
 
 ## Backups
-`powerdb backup --to DIR` is **offline**: stop the server first (the data-dir lock refuses otherwise).
-The secret key is left out unless `--include-secret`; without it, encrypted chunks and signed URLs
-cannot be recovered, so store the secret separately (or set `POWERDB_SECRET`). Restore with
-`powerdb restore --from DIR --data NEWDIR`, then `powerdb check`.
-There is no hot backup yet.
+**Online (while serving)** — the normal way. An administrator calls `POST /api/v1/maintenance/backups`
+(`{"name": "nightly", "include_secret": false, "deep": false}`; all optional), the SDK's `db.admin.backup()`,
+or the **Back up now** button on the dashboard's System page. List them with `GET /api/v1/maintenance/backups`.
+```bash
+curl -X POST -H "authorization: Bearer $POWERDB_KEY" -H 'content-type: application/json' \
+     -d '{"name":"nightly"}' https://db.example.com/api/v1/maintenance/backups
+```
+It is written on the server, under `<data>/backups` unless `backup_dir` is set (put it on another disk, then copy it off the machine).
+It does not block reads or writes. The copy is a point-in-time image: every write acknowledged before the call began is in it,
+and nothing half-done is. Before it is declared good the copy is opened like a server would open it and its structure and
+reference counts are checked (`"deep": true` also re-reads every stored chunk); a backup that fails is deleted, not left looking usable.
+Compaction waits while a backup runs.
+
+*How this was verified:* an automated test takes three backups while three writers, a deleter and continuous compaction run,
+then restores each and checks completeness, file contents and a full integrity scan (passed 15 consecutive runs after a compaction bug it exposed was fixed).
+That is a process-level test on one machine; it does not prove a power cut during a backup is safe.
+
+**Offline** — `powerdb backup --to DIR` with the server stopped (the data-dir lock refuses otherwise). Same format.
+
+The secret key is left out unless `include_secret` / `--include-secret`; without it, encrypted chunks and signed URLs cannot be
+recovered, so store the secret separately (or set `POWERDB_SECRET`). **Restore** either kind with
+`powerdb restore --from DIR --data NEWDIR` (verifies every checksum first), then `powerdb check`.
+A backup directory is not itself encrypted at rest beyond what the encrypted collections already are.
 
 ## Monitoring
 `GET /api/v1/healthz` is unauthenticated liveness. `GET /api/v1/metrics` is Prometheus text (blob log size, dead bytes, GC backlog, version) and needs an admin API key: `authorization: Bearer pdb_live_...`. Alert on `powerdb_blob_dead_bytes` growing without bound and on a failing `powerdb check`.

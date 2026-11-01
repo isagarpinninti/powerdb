@@ -383,3 +383,151 @@ async fn status_reports_a_running_server_and_an_absent_one() {
         "a different web server is not a healthy PowerDB"
     );
 }
+
+#[test]
+fn a_hot_backup_taken_during_heavy_writes_restores_complete_and_consistent() {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    let src = Dir::new("hot-src");
+    let (db, originals) = populated(&src.0);
+    let stop = Arc::new(AtomicBool::new(false));
+    let acked: Arc<Mutex<Vec<(String, u64)>>> = Arc::new(Mutex::new(vec![]));
+    let maybe_deleted: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+    let seeds = Arc::new(AtomicU64::new(1000));
+    let mut threads = vec![];
+
+    for _ in 0..3 {
+        let (db, stop, acked, seeds) = (db.clone(), stop.clone(), acked.clone(), seeds.clone());
+        threads.push(std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let seed = seeds.fetch_add(1, Ordering::Relaxed);
+                // every fifth file repeats earlier content, so shared chunks (reference counts above one) are copied too
+                let content = data(150_000, if seed % 5 == 0 { 1000 } else { seed });
+                let p = db
+                    .stage_file(
+                        "plain",
+                        "application/octet-stream",
+                        Some("f.bin"),
+                        Cursor::new(content),
+                    )
+                    .unwrap();
+                let r = db
+                    .create("plain", Map::new(), vec![("doc".into(), p)])
+                    .unwrap();
+                acked
+                    .lock()
+                    .unwrap()
+                    .push((r.id, if seed % 5 == 0 { 1000 } else { seed }));
+            }
+        }));
+    }
+    {
+        let (db, stop, acked, md) = (
+            db.clone(),
+            stop.clone(),
+            acked.clone(),
+            maybe_deleted.clone(),
+        );
+        threads.push(std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                let victim = {
+                    let a = acked.lock().unwrap();
+                    a.get(a.len() / 3).map(|(id, _)| id.clone())
+                };
+                if let Some(id) = victim {
+                    md.lock().unwrap().insert(id.clone()); // announced first: a backup may see it either way
+                    let _ = db.delete("plain", &id);
+                }
+            }
+        }));
+    }
+    {
+        let (db, stop) = (db.clone(), stop.clone());
+        threads.push(std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                db.collect(0.0).unwrap(); // rewrites and deletes segments: must wait for a backup, not corrupt it
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }));
+    }
+
+    let out = Dir::new("hot-out");
+    let mut taken = vec![];
+    for round in 0..3 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let must: Vec<(String, u64)> = acked.lock().unwrap().clone();
+        let dest = out.0.join(format!("b{round}"));
+        let report = ops::backup_online(&db, &dest, round == 0, round == 2).unwrap();
+        assert!(report.files > 3, "{report:?}");
+        assert_eq!(report.includes_secret, round == 0);
+        taken.push((dest, must));
+    }
+    stop.store(true, Ordering::Relaxed);
+    for t in threads {
+        t.join().unwrap();
+    }
+    let deleted = maybe_deleted.lock().unwrap().clone();
+    let secrets = Secrets::load_existing(&src.0).unwrap().unwrap();
+
+    for (i, (dest, must)) in taken.iter().enumerate() {
+        let restored = Dir::new("hot-restored");
+        ops::restore(dest, &restored.0).unwrap();
+        let copy = Db::open(&restored.0, opts()).unwrap();
+        copy.register_codec(Arc::new(ChaChaCodec::new(&secrets)));
+        let report = copy.verify(true).unwrap();
+        assert!(
+            report.problems.is_empty(),
+            "backup {i}: {:?}",
+            report.problems
+        );
+        let mut present = 0;
+        for (id, seed) in must {
+            if deleted.contains(id) {
+                continue;
+            }
+            let r = copy.get("plain", id).unwrap().unwrap_or_else(|| {
+                panic!("backup {i}: record {id}, acknowledged before the backup began, is missing")
+            });
+            let bytes = copy
+                .read_file(&from_hex_32(&r.files["doc"].id).unwrap())
+                .unwrap();
+            assert_eq!(
+                bytes,
+                data(150_000, *seed),
+                "backup {i}: record {id} has the wrong content"
+            );
+            present += 1;
+        }
+        assert!(present > 0, "backup {i} checked nothing");
+        for (c, id, bytes) in &originals {
+            assert_eq!(&read(&copy, c, id), bytes, "backup {i}: original {c}/{id}");
+        }
+    }
+    assert!(
+        taken.iter().map(|(_, m)| m.len()).max().unwrap() > taken[0].1.len(),
+        "later backups should have seen more writes than the first"
+    );
+}
+
+#[test]
+fn an_online_backup_refuses_an_existing_destination_and_leaves_the_secret_out_by_default() {
+    let src = Dir::new("hot-refuse");
+    let (db, _) = populated(&src.0);
+    let out = Dir::new("hot-refuse-out");
+    std::fs::create_dir_all(&out.0).unwrap();
+    assert!(matches!(
+        ops::backup_online(&db, &out.0, false, false),
+        Err(Error::Conflict(_))
+    ));
+    let dest = out.0.join("ok");
+    let r = ops::backup_online(&db, &dest, false, false).unwrap();
+    assert!(!r.includes_secret && !dest.join("secret.key").exists());
+    assert!(dest.join("BACKUP.json").is_file() && dest.join("FORMAT").is_file());
+    assert!(
+        !dest.join("LOCK").exists(),
+        "the lock file is not part of a backup"
+    );
+}

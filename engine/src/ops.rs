@@ -163,6 +163,88 @@ pub fn backup(data: &Path, dest: &Path, include_secret: bool) -> Result<BackupRe
     })
 }
 
+/// Backs up a database that is being served, without stopping it and without blocking writers.
+///
+/// `db` is the open database (inside the running server). The copy is a point-in-time image (see `Db::snapshot_to`);
+/// before it is declared good it is opened like a server would open it and its structure is checked (`deep` also re-reads
+/// every chunk). A backup that fails its own check is deleted rather than left looking usable.
+pub fn backup_online(
+    db: &Db,
+    dest: &Path,
+    include_secret: bool,
+    deep: bool,
+) -> Result<BackupReport> {
+    if dest.exists() {
+        return Err(Error::Conflict(format!(
+            "{} already exists",
+            dest.display()
+        )));
+    }
+    std::fs::create_dir_all(dest)?;
+    let built = (|| -> Result<BackupReport> {
+        let data = db.data_dir();
+        db.snapshot_to(dest)?;
+        std::fs::write(
+            dest.join("FORMAT"),
+            format!("{}\n", crate::storage::FORMAT_VERSION),
+        )?;
+        if data.join(FILE_NAME).is_file() {
+            std::fs::copy(data.join(FILE_NAME), dest.join(FILE_NAME))?;
+        }
+        let secret_present = data.join("secret.key").is_file();
+        if include_secret && secret_present {
+            std::fs::copy(data.join("secret.key"), dest.join("secret.key"))?;
+        }
+        // Open the copy as a server would, and check it. Its codec needs the secret, which may not be in the copy.
+        {
+            let copy = Db::open(dest, Options::default())?;
+            if let Some(s) = crate::security::secrets::Secrets::load_existing(data)? {
+                copy.register_codec(Arc::new(crate::security::crypto::ChaChaCodec::new(&s)));
+            }
+            let report = copy.verify(deep)?;
+            if !report.problems.is_empty() {
+                return Err(Error::Corrupt(format!(
+                    "the backup failed its own integrity check: {}",
+                    report.problems.join("; ")
+                )));
+            }
+        }
+        let _ = std::fs::remove_file(dest.join("LOCK")); // an artifact of the check, not part of a backup
+        let mut rel = Vec::new();
+        walk(dest, Path::new(""), &mut rel)?;
+        rel.sort();
+        let mut files = Vec::new();
+        let mut bytes = 0;
+        for r in &rel {
+            let (size, blake3) = hash_file(&dest.join(r))?;
+            bytes += size;
+            files.push(BackupFile {
+                path: r.to_string_lossy().replace('\\', "/"),
+                size,
+                blake3,
+            });
+        }
+        let manifest = BackupManifest {
+            powerdb_version: env!("CARGO_PKG_VERSION").into(),
+            created_at: now_ms(),
+            includes_secret: include_secret && secret_present,
+            files,
+        };
+        let mut f = std::fs::File::create(dest.join("BACKUP.json"))?;
+        f.write_all(serde_json::to_string_pretty(&manifest)?.as_bytes())?;
+        f.sync_all()?;
+        Ok(BackupReport {
+            files: manifest.files.len(),
+            bytes,
+            includes_secret: manifest.includes_secret,
+        })
+    })();
+    if built.is_err() {
+        let _ = std::fs::remove_dir_all(dest);
+    }
+    built
+}
+
 /// Restores a backup into an empty directory, checking every file against the manifest before and the database's own structure after.
 pub fn restore(from: &Path, data: &Path) -> Result<BackupReport> {
     if !is_empty_dir(data)? {
@@ -306,4 +388,46 @@ pub fn status(addr: SocketAddr) -> Result<String> {
             "something answered at {addr}, but it is not a healthy PowerDB: {line}"
         )))
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackupInfo {
+    pub name: String,
+    pub created_at: i64,
+    pub files: usize,
+    pub bytes: u64,
+    pub includes_secret: bool,
+    pub powerdb_version: String,
+}
+
+/// The backups found directly under `root`, newest first. A directory without a readable manifest is not listed.
+pub fn list_backups(root: &Path) -> Result<Vec<BackupInfo>> {
+    let mut out = Vec::new();
+    let rd = match std::fs::read_dir(root) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e.into()),
+    };
+    for e in rd {
+        let e = e?;
+        if !e.file_type()?.is_dir() {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(e.path().join("BACKUP.json")) else {
+            continue;
+        };
+        let Ok(m) = serde_json::from_slice::<BackupManifest>(&bytes) else {
+            continue;
+        };
+        out.push(BackupInfo {
+            name: e.file_name().to_string_lossy().into_owned(),
+            created_at: m.created_at,
+            files: m.files.len(),
+            bytes: m.files.iter().map(|f| f.size).sum(),
+            includes_secret: m.includes_secret,
+            powerdb_version: m.powerdb_version,
+        });
+    }
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.name.cmp(&b.name)));
+    Ok(out)
 }

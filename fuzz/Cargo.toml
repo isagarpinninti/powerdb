@@ -1,0 +1,40 @@
+[package]
+name = "powerdb-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+powerdb = { path = "../engine" }
+serde_json = "1"
+
+[[bin]]
+name = "expr"
+path = "fuzz_targets/expr.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "magic"
+path = "fuzz_targets/magic.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "settings"
+path = "fuzz_targets/settings.rs"
+test = false
+doc = false
+
+# not part of the main workspace: it needs a nightly toolchain
+[workspace]

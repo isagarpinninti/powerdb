@@ -269,3 +269,92 @@ pub async fn metrics(
         body,
     ))
 }
+
+#[derive(Deserialize, Default)]
+pub struct BackupReq {
+    /// Letters, digits, `.`, `_` and `-` (not first): a directory name inside the backup directory. Default: a UTC timestamp.
+    name: Option<String>,
+    /// Put `secret.key` in the backup. Without it the backup cannot decrypt encrypted collections unless the secret is kept elsewhere.
+    #[serde(default)]
+    include_secret: bool,
+    /// Also re-read and verify every stored chunk before declaring the backup good (slower).
+    #[serde(default)]
+    deep: bool,
+}
+
+fn backup_root(st: &AppState) -> std::path::PathBuf {
+    match &st.cfg.backup_dir {
+        Some(d) if d.is_absolute() => d.clone(),
+        Some(d) => st.db.data_dir().join(d),
+        None => st.db.data_dir().join("backups"),
+    }
+}
+
+fn valid_backup_name(n: &str) -> bool {
+    (1..=64).contains(&n.len())
+        && !n.starts_with('.')
+        && n.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
+}
+
+/// `backup-YYYYMMDD-HHMMSS` in UTC, without a date library (days since 1970 to a civil date).
+fn default_backup_name() -> String {
+    let secs = crate::util::now_ms() / 1000;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "backup-{year:04}{month:02}{day:02}-{:02}{:02}{:02}",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// Takes a consistent backup of the running database without blocking reads or writes.
+pub async fn backup(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+    req: Option<Json<BackupReq>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    admin(&who)?;
+    let req = req.map(|Json(r)| r).unwrap_or_default();
+    let name = req.name.unwrap_or_else(default_backup_name);
+    if !valid_backup_name(&name) {
+        return Err(ApiError::bad_request(
+            "name must be 1-64 letters, digits, '.', '_' or '-', and not start with '.'",
+        ));
+    }
+    let root = backup_root(&st);
+    let dest = root.join(&name);
+    let db = st.db.clone();
+    let (include_secret, deep) = (req.include_secret, req.deep);
+    let report = blocking(move || {
+        std::fs::create_dir_all(&root)?;
+        crate::ops::backup_online(&db, &dest, include_secret, deep)
+    })
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            json!({"name": name, "files": report.files, "bytes": report.bytes, "includes_secret": report.includes_secret}),
+        ),
+    ))
+}
+
+pub async fn list_backups(
+    State(st): State<AppState>,
+    Caller(who): Caller,
+) -> Result<Json<Value>, ApiError> {
+    admin(&who)?;
+    let root = backup_root(&st);
+    let items = blocking(move || crate::ops::list_backups(&root)).await?;
+    Ok(Json(json!({ "backups": items })))
+}

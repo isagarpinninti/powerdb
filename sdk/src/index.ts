@@ -233,6 +233,15 @@ class Admin {
     return this.db.json('GET', '/api/v1/stats');
   }
   /** Releases deleted files' space now instead of waiting for the background pass. */
+  /** Takes a consistent backup of the running database (writers are not blocked). Written on the server, under its backup directory. */
+  backup(opts: { name?: string; includeSecret?: boolean; deep?: boolean } = {}): Promise<{ name: string; files: number; bytes: number; includes_secret: boolean }> {
+    return this.db.json('POST', '/api/v1/maintenance/backups', { name: opts.name, include_secret: opts.includeSecret, deep: opts.deep });
+  }
+
+  backups(): Promise<{ backups: { name: string; created_at: number; files: number; bytes: number; includes_secret: boolean; powerdb_version: string }[] }> {
+    return this.db.json('GET', '/api/v1/maintenance/backups');
+  }
+
   gc(): Promise<{ files_released: number; bytes_reclaimed: number; segments_compacted: number }> {
     return this.db.json('POST', '/api/v1/maintenance/gc');
   }

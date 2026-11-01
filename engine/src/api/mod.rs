@@ -38,6 +38,8 @@ pub struct Config {
     pub url_ttl_secs: i64,
     pub cors_origins: Vec<String>,
     pub login_attempts_per_minute: u32,
+    /// Where online backups are written; relative paths are relative to the data directory. Default: `<data>/backups`.
+    pub backup_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             url_ttl_secs: crate::security::signed_url::DEFAULT_TTL_SECS,
             cors_origins: vec![],
             login_attempts_per_minute: 10,
+            backup_dir: None,
         }
     }
 }
@@ -263,6 +266,10 @@ pub fn router(state: AppState) -> Router {
         .route("/stats", get(admin::stats))
         .route("/metrics", get(admin::metrics))
         .route("/maintenance/gc", post(admin::gc))
+        .route(
+            "/maintenance/backups",
+            get(admin::list_backups).post(admin::backup),
+        )
         // JSON bodies are small; uploads stream and enforce their own limits per field
         .layer(DefaultBodyLimit::max(1 << 20));
     let upload_routes = Router::new()

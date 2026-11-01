@@ -1407,3 +1407,103 @@ async fn a_changed_password_signs_every_other_session_out() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn the_dashboard_fallback_answers_only_reads() {
+    let a = app();
+    assert_eq!(get(&a, "/some/page", None).await.status, StatusCode::OK);
+    for m in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+        let r = send(&a, m.clone(), "/assets/x.js", None, None, vec![], &[]).await;
+        assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED, "{m}");
+    }
+}
+
+#[tokio::test]
+async fn an_administrator_can_take_and_list_online_backups_and_nobody_else_can() {
+    let a = app();
+    let u = mk_user(&a, "alice@example.com").await;
+    mk_collection(&a, invoices(json!({}), false)).await;
+    let rec = json(
+        &a,
+        Method::POST,
+        "/api/v1/collections/invoices/records",
+        Some(&a.admin),
+        json!({"client": "Acme", "amount": 5}),
+    )
+    .await;
+    assert_eq!(rec.status, StatusCode::CREATED);
+
+    let url = "/api/v1/maintenance/backups";
+    assert_eq!(get(&a, url, None).await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(get(&a, url, Some(&u)).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        json(&a, Method::POST, url, Some(&u), json!({}))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+
+    // names cannot reach outside the backup directory
+    for bad in [
+        "../x",
+        ".hidden",
+        "a/b",
+        "a\\b",
+        "",
+        "x".repeat(65).as_str(),
+        "sp ace",
+    ] {
+        let r = json(&a, Method::POST, url, Some(&a.admin), json!({"name": bad})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad:?}");
+    }
+
+    let r = json(
+        &a,
+        Method::POST,
+        url,
+        Some(&a.admin),
+        json!({"name": "first"}),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&r.body)
+    );
+    assert_eq!(r.json()["includes_secret"], false);
+    let again = json(
+        &a,
+        Method::POST,
+        url,
+        Some(&a.admin),
+        json!({"name": "first"}),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    let auto = send(&a, Method::POST, url, Some(&a.admin), None, vec![], &[]).await; // no body at all
+    assert_eq!(auto.status, StatusCode::CREATED);
+    assert!(auto.json()["name"].as_str().unwrap().starts_with("backup-"));
+
+    let list = get(&a, url, Some(&a.admin)).await;
+    assert_eq!(list.status, StatusCode::OK);
+    let names: Vec<String> = list.json()["backups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        names.contains(&"first".to_string()) && names.len() == 2,
+        "{names:?}"
+    );
+
+    // the backup the API made restores into a database that has the record
+    let restored = std::env::temp_dir().join(format!("powerdb-api-restored-{}", new_id()));
+    let src = a.st.db.data_dir().join("backups").join("first");
+    powerdb::ops::restore(&src, &restored).unwrap();
+    let copy = powerdb::Db::open(&restored, Options::default()).unwrap();
+    assert_eq!(copy.count("invoices").unwrap(), 1);
+    drop(copy);
+    let _ = std::fs::remove_dir_all(&restored);
+}
