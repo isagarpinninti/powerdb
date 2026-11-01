@@ -265,6 +265,31 @@ impl Auth {
         }
     }
 
+    /// Signs in someone whose email address an identity provider has vouched for. The account is the one with that email;
+    /// when there is none it is created if `create` allows, with a random password nobody knows, so only the provider can
+    /// sign it in (the person can still set a password later by an administrator resetting it).
+    pub fn login_verified(&self, email: &str, create: bool) -> Result<(String, UserInfo)> {
+        let email = email.trim().to_lowercase();
+        let existing = match self.inner.emails.get(email.as_bytes())? {
+            Some(id) => self.row(&String::from_utf8_lossy(&id))?,
+            None => None,
+        };
+        let row = match existing {
+            Some(r) => r,
+            None if create => {
+                let info = self.register(
+                    &email,
+                    &crate::util::hex(&crate::util::random_bytes::<32>()),
+                    Role::User,
+                )?;
+                self.row(&info.id)?
+                    .ok_or_else(|| Error::Corrupt("new account".into()))?
+            }
+            None => return Err(Error::Denied("no account for this email".into())),
+        };
+        Ok((self.issue(&row), Self::info(&row)))
+    }
+
     pub fn change_password(&self, user_id: &str, new_password: &str) -> Result<()> {
         if new_password.chars().count() < 8 || new_password.len() > 1024 {
             return Err(Error::Invalid(

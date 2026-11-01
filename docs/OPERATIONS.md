@@ -13,6 +13,34 @@ PowerDB listens on `127.0.0.1:8090` by default. Two ways to serve other machines
 
 Never expose plain HTTP beyond localhost: bearer tokens travel in headers. `powerdb status` works against either mode.
 
+## Sign in with Google, GitHub or another provider
+Optional. Configure it in `powerdb.toml` (see the commented `[oauth]` block there):
+```toml
+[oauth]
+public_url = "https://db.example.com"            # how browsers reach this server
+redirects  = ["https://app.example.com/signed-in"]  # where a finished sign-in may send the browser (exact matches)
+[oauth.providers.github]
+client_id = "..."
+[oauth.providers.google]
+client_id = "...apps.googleusercontent.com"
+```
+and set the secrets in the environment, not the file: `POWERDB_OAUTH_GITHUB_CLIENT_SECRET`, `POWERDB_OAUTH_GOOGLE_CLIENT_SECRET`.
+At the provider, register `https://db.example.com/api/v1/auth/oauth/<provider>/callback` as the redirect URI.
+Any other OAuth2 provider works with `auth_url`, `token_url` and `userinfo_url` (it must report `email` and `email_verified`).
+
+An app starts a sign-in at `db.auth.oauthUrl('github', redirect)` and reads the result with `db.auth.finishOAuth(location.hash)`.
+The flow is the authorization-code flow with PKCE, run on the server. The rules it enforces:
+- the browser is only ever sent to a URL listed under `redirects`, so the endpoint cannot be used as an open redirect;
+- the session token comes back in the URL *fragment*, which servers and proxies never see or log;
+- the provider must vouch for the email address; an unverified one is refused;
+- the account is the one with that email. A missing account is created (as a normal user, with a password nobody knows)
+  only when `open_registration` is on; otherwise sign-in is refused with `no_account`;
+- administrator accounts cannot sign in this way unless `allow_admin = true`, because the provider would otherwise be a way into the whole database.
+
+*How this was verified:* tests drive the full flow through the real router against a mock provider that checks PKCE, the client
+secret, the exact redirect URI and single-use codes. It has **not** been run against real Google or GitHub, which needs credentials
+registered to your domain; try it with a test app there before relying on it.
+
 ## Configuration
 Order: flags > environment (`POWERDB_*`) > `powerdb.toml` in the data dir > defaults. Unknown keys in the file are errors.
 

@@ -51,6 +51,7 @@ pub fn build_state(dir: &Path, opts: Options, cfg: Config) -> Result<(AppState, 
             signer,
             cfg: Arc::new(cfg),
             limiter: Arc::new(Limiter::new()),
+            oauth: Default::default(),
         },
         boot,
     ))

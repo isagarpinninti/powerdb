@@ -171,6 +171,35 @@ class Auth {
   logout(): void {
     this.db.setToken(undefined);
   }
+
+  /** The sign-in providers the server offers ("google", "github", ...). */
+  async providers(): Promise<string[]> {
+    return (await this.db.json<{ providers: string[] }>('GET', '/api/v1/auth/oauth/providers')).providers;
+  }
+
+  /**
+   * Where to send the browser to sign in with a provider. `redirect` must be one of the URLs the server's settings allow;
+   * the browser comes back there with `#token=...` (or `#error=...`) in the URL fragment: pass that to `finishOAuth`.
+   */
+  oauthUrl(provider: string, redirect?: string): string {
+    const q = redirect ? `?redirect=${encodeURIComponent(redirect)}` : '';
+    return `${this.db.baseUrl}/api/v1/auth/oauth/${encodeURIComponent(provider)}/start${q}`;
+  }
+
+  /**
+   * Reads the result of an OAuth sign-in from `location.hash`, keeps the session token, and returns it. Throws with the
+   * server's reason (`no_account`, `unverified_email`, `access_denied`, ...) when sign-in did not happen; returns null
+   * when the fragment holds no sign-in result at all.
+   */
+  finishOAuth(hash: string): string | null {
+    const p = new URLSearchParams(hash.replace(/^#/, ''));
+    const error = p.get('error');
+    if (error) throw new PowerDBError(401, error, `sign-in failed: ${error}`);
+    const token = p.get('token');
+    if (!token) return null;
+    this.db.setToken(token);
+    return token;
+  }
 }
 
 export type Rule = string | null | undefined;

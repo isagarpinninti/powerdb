@@ -28,6 +28,7 @@ futures-util = "0.3.34"
 getrandom = "0.4.3"
 hmac = "0.13.0"
 mime_guess = "2.0.5"
+percent-encoding = "2"
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -43,6 +44,7 @@ tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["limit", "trace", "set-header", "compression-gzip", "cors"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [dev-dependencies]

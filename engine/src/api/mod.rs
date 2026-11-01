@@ -5,6 +5,7 @@ mod admin;
 mod authn;
 mod error;
 mod files;
+pub mod oauth;
 mod query;
 mod records;
 mod ui;
@@ -40,6 +41,8 @@ pub struct Config {
     pub login_attempts_per_minute: u32,
     /// Where online backups are written; relative paths are relative to the data directory. Default: `<data>/backups`.
     pub backup_dir: Option<std::path::PathBuf>,
+    /// Sign in with Google, GitHub or another OAuth2 provider. Empty: not offered.
+    pub oauth: oauth::OAuthConfig,
 }
 
 impl Default for Config {
@@ -52,6 +55,7 @@ impl Default for Config {
             cors_origins: vec![],
             login_attempts_per_minute: 10,
             backup_dir: None,
+            oauth: Default::default(),
         }
     }
 }
@@ -95,6 +99,7 @@ pub struct AppState {
     pub signer: UrlSigner,
     pub cfg: Arc<Config>,
     pub limiter: Arc<Limiter>,
+    pub oauth: Arc<oauth::OAuthState>,
 }
 
 /// The peer address of the connection, when the server was started with connection info (tests that call the router directly have none).
@@ -243,6 +248,9 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/refresh", post(authn::refresh))
         .route("/auth/me", get(authn::me))
         .route("/auth/password", post(authn::password))
+        .route("/auth/oauth/providers", get(oauth::providers))
+        .route("/auth/oauth/{provider}/start", get(oauth::start))
+        .route("/auth/oauth/{provider}/callback", get(oauth::callback))
         .route(
             "/collections",
             get(admin::list_collections).post(admin::create_collection),

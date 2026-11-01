@@ -150,3 +150,12 @@ test('uploads that fail the content check are rejected with a clear error', asyn
   const exe = Buffer.concat([Buffer.from('MZ\x90\x00'), randomBytes(5000)]);
   await assert.rejects(admin.collection('invoices').create({ client: 'x', document: { file: exe, name: 'photo.png', type: 'image/png' } }), (e) => e instanceof PowerDBError && e.status === 400 && /executable/.test(e.message));
 });
+
+test('OAuth helpers build the sign-in URL and read the result from the fragment', () => {
+  const db = new PowerDB('http://localhost:1234/');
+  assert.equal(db.auth.oauthUrl('github', 'https://app.example/done'), 'http://localhost:1234/api/v1/auth/oauth/github/start?redirect=https%3A%2F%2Fapp.example%2Fdone');
+  assert.equal(db.auth.oauthUrl('google'), 'http://localhost:1234/api/v1/auth/oauth/google/start');
+  assert.equal(db.auth.finishOAuth('#something=else'), null);
+  assert.throws(() => db.auth.finishOAuth('#error=no_account'), (e) => e instanceof PowerDBError && /no_account/.test(e.message));
+  assert.equal(db.auth.finishOAuth('#token=abc.def.ghi'), 'abc.def.ghi');
+});
