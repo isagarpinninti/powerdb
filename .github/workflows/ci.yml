@@ -68,3 +68,75 @@ jobs:
           done
           curl -fsS -H "authorization: Bearer $KEY" http://127.0.0.1:8090/api/v1/collections | grep -q '"name":"t"'
           docker exec pdb powerdb --version
+  service:
+    # Installs PowerDB as a real operating-system service and drives its whole life cycle.
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-24.04, macos-15, windows-2025] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with: { toolchain: stable }
+      - run: cargo build --locked --release
+      - name: Service life cycle (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          # a service runs the installed binary, not one under a home directory
+          sudo install -m 755 target/release/powerdb /usr/local/bin/powerdb
+          sudo powerdb service install --addr 127.0.0.1:8140
+          for i in $(seq 1 30); do powerdb status --addr 127.0.0.1:8140 && break; sleep 2; done
+          powerdb status --addr 127.0.0.1:8140
+          sudo powerdb service status
+          sudo powerdb service stop
+          sleep 3
+          ! powerdb status --addr 127.0.0.1:8140
+          sudo powerdb service start
+          for i in $(seq 1 30); do powerdb status --addr 127.0.0.1:8140 && break; sleep 2; done
+          powerdb status --addr 127.0.0.1:8140
+          sudo powerdb service uninstall
+          sleep 2
+          ! powerdb status --addr 127.0.0.1:8140
+      - name: Service life cycle (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "$PWD\target\release\powerdb.exe"
+          & $exe service install --data "$env:RUNNER_TEMP\pdb-service" --addr 127.0.0.1:8140
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          for ($i = 0; $i -lt 30; $i++) { & $exe status --addr 127.0.0.1:8140; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 2 }
+          & $exe status --addr 127.0.0.1:8140
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP\pdb-service\powerdb.log" -ErrorAction SilentlyContinue; sc.exe query PowerDB; exit 1 }
+          & $exe service status
+          & $exe service stop
+          Start-Sleep 4
+          & $exe status --addr 127.0.0.1:8140
+          if ($LASTEXITCODE -eq 0) { Write-Error "still running after stop"; exit 1 }
+          & $exe service start
+          for ($i = 0; $i -lt 30; $i++) { & $exe status --addr 127.0.0.1:8140; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 2 }
+          & $exe status --addr 127.0.0.1:8140
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $exe service uninstall
+  install-scripts:
+    # Runs the real installers against the latest published release, on every platform they claim to support.
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: install.sh
+        if: runner.os != 'Windows'
+        env: { POWERDB_REPO: "${{ github.repository }}", POWERDB_BIN_DIR: "${{ runner.temp }}/bin" }
+        run: |
+          ./scripts/install.sh
+          "$POWERDB_BIN_DIR/powerdb" --version
+          "$POWERDB_BIN_DIR/powerdb" init "$RUNNER_TEMP/data" | head -3
+      - name: install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/install.ps1 -Repo "${{ github.repository }}" -Dest "$env:RUNNER_TEMP\powerdb"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$env:RUNNER_TEMP\powerdb\powerdb.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }

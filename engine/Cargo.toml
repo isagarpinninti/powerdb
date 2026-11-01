@@ -47,3 +47,6 @@ xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [dev-dependencies]
 http-body-util = "0.1.5"
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8"

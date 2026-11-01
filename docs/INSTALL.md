@@ -33,9 +33,17 @@ powerdb serve --data ./mydata
 ```
 Open http://127.0.0.1:8090. `powerdb status` checks a running server.
 
-## Run at boot
-| Platform | File |
-|---|---|
-| Linux (systemd) | `deploy/powerdb.service` → `/etc/systemd/system/`, create user `powerdb`, `systemctl enable --now powerdb` |
-| macOS (launchd) | `deploy/com.powerdb.server.plist` → `~/Library/LaunchAgents/`, edit the data path, `launchctl load` |
-| Windows | `deploy/windows-service.ps1` (scheduled task at logon; not a true Windows Service) |
+## Run as a service (starts at boot)
+PowerDB installs itself as an operating-system service; no unit files to copy.
+```bash
+sudo powerdb service install            # Linux: systemd unit; macOS: launch daemon (add --user for a per-user launch agent)
+sudo powerdb service status | stop | start | uninstall
+```
+```powershell
+powerdb service install                 # Windows: a Windows Service running as LocalService (run PowerShell as Administrator)
+powerdb service status | stop | start | uninstall
+```
+Options: `--data DIR`, `--addr HOST:PORT`, `--run-as USER` (Linux and macOS), `--print` to show what would be installed without changing anything.
+Default data: `/var/lib/powerdb` (Linux), `/usr/local/var/powerdb` (macOS daemon), `%ProgramData%\PowerDB` (Windows). Uninstalling never touches data.
+The service runs the binary where it was installed from, so install `powerdb` somewhere stable (for example `/usr/local/bin`) first.
+Logs: `journalctl -u powerdb` (Linux), `<data>/powerdb.log` (macOS, Windows).

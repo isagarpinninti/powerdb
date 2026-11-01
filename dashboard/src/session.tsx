@@ -41,10 +41,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   // resume a session that was open in this tab
   useMemo(() => {
-    const t = sessionStorage.getItem(KEY);
+    // The desktop app opens the dashboard as `/#key=pdb_live_…`. A fragment is never sent to a server; it is removed at once.
+    const fromApp = /^#key=(pdb_live_[A-Za-z0-9_-]+)$/.exec(window.location.hash)?.[1];
+    if (fromApp) window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    const t = fromApp ?? sessionStorage.getItem(KEY);
     if (t) {
       db.setToken(t);
-      identify().then(setIdentity, () => { sessionStorage.removeItem(KEY); db.setToken(undefined); }).finally(() => setReady(true));
+      identify().then((who) => { setIdentity(who); sessionStorage.setItem(KEY, t); }, () => { sessionStorage.removeItem(KEY); db.setToken(undefined); }).finally(() => setReady(true));
     } else setReady(true);
   }, []);
 

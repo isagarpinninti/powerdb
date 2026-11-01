@@ -1,4 +1,5 @@
 mod bench;
+mod service;
 
 use clap::{Parser, Subcommand};
 use powerdb::config::{self, FileConfig, Overrides, Settings};
@@ -59,6 +60,10 @@ enum Cmd {
         /// PEM private key for --tls-cert.
         #[arg(long, env = "POWERDB_TLS_KEY")]
         tls_key: Option<PathBuf>,
+        /// Shut down cleanly when standard input closes (or a line `shutdown` arrives). For a parent process, such as the
+        /// desktop app, that has no portable way to send a termination signal.
+        #[arg(long)]
+        shutdown_on_stdin_close: bool,
         /// Use a temporary data directory that is deleted when the server stops. For tests and trying things out.
         #[arg(long)]
         ephemeral: bool,
@@ -106,10 +111,61 @@ enum Cmd {
         #[arg(long)]
         admin: bool,
     },
+    /// Install and control PowerDB as an operating-system service (Windows Service, launchd, systemd).
+    Service {
+        #[command(subcommand)]
+        action: ServiceCmd,
+    },
     /// Measure the storage engine on this machine.
     Bench {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCmd {
+    /// Register the service and start it. Needs administrator rights (sudo) unless --user on macOS.
+    Install {
+        /// Where the service keeps its data. Default: the platform's usual place.
+        #[arg(long)]
+        data: Option<PathBuf>,
+        #[arg(long)]
+        addr: Option<SocketAddr>,
+        /// Linux and macOS daemons: the account to run as (it must own the data directory).
+        #[arg(long)]
+        run_as: Option<String>,
+        /// macOS: install for the signed-in user (a launch agent) instead of the whole machine.
+        #[arg(long)]
+        user: bool,
+        /// Only print the unit or job description, change nothing.
+        #[arg(long)]
+        print: bool,
+    },
+    /// Stop and remove the service. Data is left alone.
+    Uninstall {
+        #[arg(long)]
+        user: bool,
+    },
+    Start {
+        #[arg(long)]
+        user: bool,
+    },
+    Stop {
+        #[arg(long)]
+        user: bool,
+    },
+    Status {
+        #[arg(long)]
+        user: bool,
+    },
+    /// Entry point for the Windows Service Control Manager. Not for people.
+    #[command(hide = true)]
+    Run {
+        #[arg(long)]
+        data: PathBuf,
+        #[arg(long)]
+        addr: Option<SocketAddr>,
     },
 }
 
@@ -127,13 +183,33 @@ fn fail(e: impl std::fmt::Display) -> i32 {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "powerdb=info,warn".into()),
-        )
-        .init();
-    let code = match Cli::parse().cmd {
+    let cli = Cli::parse();
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "powerdb=info,warn".into());
+    // A service has no console, so its log goes to a file beside the data.
+    let service_log = match &cli.cmd {
+        Cmd::Service {
+            action: ServiceCmd::Run { data, .. },
+        } => {
+            let _ = std::fs::create_dir_all(data);
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(data.join("powerdb.log"))
+                .ok()
+        }
+        _ => None,
+    };
+    match service_log {
+        Some(f) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+            .init(),
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
+    let code = match cli.cmd {
+        Cmd::Service { action } => service_command(action).await,
         Cmd::Bench { args } => tokio::task::spawn_blocking(move || bench::run(&args))
             .await
             .unwrap_or(1),
@@ -238,6 +314,7 @@ async fn main() {
             max_upload_gib,
             tls_cert,
             tls_key,
+            shutdown_on_stdin_close,
             ephemeral,
         } => {
             let cli = Overrides {
@@ -251,13 +328,111 @@ async fn main() {
                 tls_cert,
                 tls_key,
             };
-            match serve(data, cli, ephemeral).await {
+            match serve(
+                data,
+                cli,
+                ephemeral,
+                shutdown_signal(shutdown_on_stdin_close),
+            )
+            .await
+            {
                 Ok(()) => 0,
                 Err(e) => fail(e),
             }
         }
     };
     std::process::exit(code);
+}
+
+fn report(r: Result<String, String>) -> i32 {
+    match r {
+        Ok(m) => {
+            println!("{m}");
+            0
+        }
+        Err(e) => fail(e),
+    }
+}
+
+async fn service_command(action: ServiceCmd) -> i32 {
+    use service::Spec;
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = action;
+        fail("services are supported on Linux (systemd), macOS (launchd) and Windows")
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    match action {
+        ServiceCmd::Install {
+            data,
+            addr,
+            run_as,
+            user,
+            print,
+        } => {
+            let exe = match std::env::current_exe().and_then(|p| p.canonicalize()) {
+                Ok(e) => e,
+                Err(e) => return fail(e),
+            };
+            let spec = Spec {
+                exe,
+                data: data.unwrap_or_else(|| service::default_data_dir(user)),
+                addr,
+                run_as,
+            };
+            #[cfg(target_os = "macos")]
+            return report(service::install(&spec, print, user));
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = user;
+                report(service::install(&spec, print))
+            }
+        }
+        ServiceCmd::Uninstall { user } => {
+            #[cfg(target_os = "macos")]
+            return report(service::uninstall(user));
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = user;
+                report(service::uninstall())
+            }
+        }
+        ServiceCmd::Start { user } => service_control("start", user),
+        ServiceCmd::Stop { user } => service_control("stop", user),
+        ServiceCmd::Status { user } => service_control("status", user),
+        ServiceCmd::Run { data, addr } => {
+            #[cfg(windows)]
+            {
+                let handle = tokio::runtime::Handle::current();
+                match tokio::task::spawn_blocking(move || {
+                    service::run_as_service(handle, data, addr)
+                })
+                .await
+                {
+                    Ok(r) => report(r.map(|_| String::new())),
+                    Err(e) => fail(e),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (data, addr);
+                fail(
+                    "`service run` is only for the Windows Service Control Manager; use `powerdb serve`",
+                )
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn service_control(action: &str, user: bool) -> i32 {
+    #[cfg(target_os = "macos")]
+    return report(service::control(action, user));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = user;
+        report(service::control(action))
+    }
 }
 
 fn check(data: PathBuf, quick: bool) -> i32 {
@@ -297,10 +472,11 @@ fn check(data: PathBuf, quick: bool) -> i32 {
     }
 }
 
-async fn serve(
+pub(crate) async fn serve(
     data: PathBuf,
     cli: Overrides,
     ephemeral: bool,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (data, _guard) = if ephemeral {
         let d = std::env::temp_dir().join(format!("powerdb-ephemeral-{}", powerdb::util::new_id()));
@@ -378,7 +554,7 @@ async fn serve(
         let handle = axum_server::Handle::new();
         let h = handle.clone();
         tokio::spawn(async move {
-            shutdown_signal().await;
+            shutdown.await;
             tracing::info!("shutting down");
             h.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
         });
@@ -401,8 +577,8 @@ async fn serve(
             data.display()
         );
         axum::serve(listener, svc)
-            .with_graceful_shutdown(async {
-                shutdown_signal().await;
+            .with_graceful_shutdown(async move {
+                shutdown.await;
                 tracing::info!("shutting down");
             })
             .await?;
@@ -412,7 +588,35 @@ async fn serve(
 }
 
 /// Resolves when the process is asked to stop: Ctrl-C everywhere, and SIGTERM on Unix, which is what systemd, Docker and most supervisors send.
-async fn shutdown_signal() {
+async fn shutdown_signal(stdin_shutdown: bool) {
+    if stdin_shutdown {
+        tokio::select! {
+            _ = os_signal() => {}
+            _ = stdin_closed() => {}
+        }
+    } else {
+        os_signal().await;
+    }
+}
+
+/// Resolves when standard input reaches end of file, or a line says `shutdown`.
+async fn stdin_closed() {
+    let _ = tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        let stdin = std::io::stdin();
+        loop {
+            line.clear();
+            match stdin.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) if line.trim() == "shutdown" => break,
+                Ok(_) => {}
+            }
+        }
+    })
+    .await;
+}
+
+async fn os_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
