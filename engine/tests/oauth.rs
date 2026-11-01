@@ -120,6 +120,14 @@ impl Drop for App {
 }
 
 async fn app(open_registration: bool, allow_admin: bool) -> App {
+    app_cfg(open_registration, allow_admin, 10).await
+}
+
+async fn app_with_limit(per_minute: u32) -> App {
+    app_cfg(false, false, per_minute).await
+}
+
+async fn app_cfg(open_registration: bool, allow_admin: bool, per_minute: u32) -> App {
     let (base, idp) = start_idp().await;
     let provider = |name: &str| Provider {
         kind: Kind::Generic,
@@ -136,6 +144,7 @@ async fn app(open_registration: bool, allow_admin: bool) -> App {
     providers.insert("other".to_string(), provider("other"));
     let cfg = Config {
         open_registration,
+        login_attempts_per_minute: per_minute,
         oauth: OAuthConfig {
             public_url: PUBLIC.into(),
             redirects: vec![DONE.into(), "https://app.test/other".into()],
@@ -487,5 +496,27 @@ async fn providers_are_listed_for_a_sign_in_page_without_exposing_secrets() {
         r.body,
         json!({"providers": ["mock", "other"]}),
         "names only: no ids, secrets or URLs"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_client_cannot_fill_the_table_of_sign_ins_in_progress() {
+    let a = app_with_limit(2).await; // 2 attempts a minute, so 4 sign-in requests
+    for i in 0..4 {
+        assert_eq!(
+            get_req(&a, "/api/v1/auth/oauth/mock/start").await.status,
+            StatusCode::SEE_OTHER,
+            "request {i}"
+        );
+    }
+    assert_eq!(
+        get_req(&a, "/api/v1/auth/oauth/mock/start").await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        get_req(&a, "/api/v1/auth/oauth/mock/callback?code=x&state=y")
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS
     );
 }

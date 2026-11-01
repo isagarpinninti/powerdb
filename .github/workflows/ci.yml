@@ -33,6 +33,9 @@ jobs:
         working-directory: sdk
       - run: npm ci && npm run typecheck
         working-directory: dashboard
+      - name: Dashboard tests (against the real server)
+        run: npm test
+        working-directory: dashboard
   docker:
     # Builds the image and runs it, on both architectures: the image is only worth shipping if a container actually starts.
     strategy:

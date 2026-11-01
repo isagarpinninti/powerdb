@@ -44,16 +44,66 @@ fn xml(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Quotes a word for a systemd `ExecStart=` or path setting: spaces stay inside it, and `%` and `$`, which systemd would
+/// otherwise expand, are escaped.
+fn systemd_quote(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '%' => out.push_str("%%"),
+            '$' => out.push_str("$$"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+impl Spec {
+    /// Refuses anything that could change the meaning of a unit file, a job description or a command line: a newline in
+    /// a path would otherwise add directives of the attacker's choosing.
+    pub fn validate(&self) -> Result<(), String> {
+        let bad = |s: &str| s.chars().any(|c| c.is_control() || c == '"');
+        for (what, v) in [
+            ("the program path", self.exe.display().to_string()),
+            ("--data", self.data.display().to_string()),
+        ] {
+            if bad(&v) {
+                return Err(format!("{what} contains a quote or control character"));
+            }
+        }
+        if let Some(u) = &self.run_as
+            && (u.is_empty()
+                || !u
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+        {
+            return Err("--run-as must be a plain account name (letters, digits, _ - .)".into());
+        }
+        Ok(())
+    }
+}
+
 /// A systemd unit. Without `run_as` the service uses a transient system user (`DynamicUser`) whose home is `/var/lib/powerdb`;
 /// that only works for the default data directory, so a different directory needs an explicit account that owns it.
 pub fn systemd_unit(s: &Spec) -> String {
-    let args = s.serve_args().join(" ");
+    let args = s
+        .serve_args()
+        .iter()
+        .map(|a| systemd_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ");
     let account = match &s.run_as {
         Some(u) => format!("User={u}\n"),
         None => "DynamicUser=yes\nStateDirectory=powerdb\n".to_string(),
     };
     let write_path = if s.run_as.is_some() {
-        format!("ReadWritePaths={}\n", s.data.display())
+        format!(
+            "ReadWritePaths={}\n",
+            systemd_quote(&s.data.display().to_string())
+        )
     } else {
         String::new()
     };
@@ -62,7 +112,7 @@ pub fn systemd_unit(s: &Spec) -> String {
          [Service]\n{account}ExecStart={exe} {args}\nRestart=on-failure\nTimeoutStopSec=30\n\
          NoNewPrivileges=true\nProtectSystem=strict\nProtectHome=true\nPrivateTmp=true\n{write_path}\n\
          [Install]\nWantedBy=multi-user.target\n",
-        exe = s.exe.display()
+        exe = systemd_quote(&s.exe.display().to_string())
     )
 }
 
@@ -419,7 +469,7 @@ mod tests {
     fn the_systemd_unit_runs_the_server_and_isolates_it() {
         let u = systemd_unit(&spec(None));
         assert!(u.contains(
-            "ExecStart=/usr/local/bin/powerdb serve --data /var/lib/powerdb --addr 0.0.0.0:8443"
+            "ExecStart=\"/usr/local/bin/powerdb\" \"serve\" \"--data\" \"/var/lib/powerdb\" \"--addr\" \"0.0.0.0:8443\""
         ));
         assert!(
             u.contains("DynamicUser=yes")
@@ -429,9 +479,31 @@ mod tests {
         let u = systemd_unit(&spec(Some("db")));
         assert!(
             u.contains("User=db")
-                && u.contains("ReadWritePaths=/var/lib/powerdb")
+                && u.contains("ReadWritePaths=\"/var/lib/powerdb\"")
                 && !u.contains("DynamicUser")
         );
+    }
+
+    #[test]
+    fn a_path_with_spaces_or_special_characters_stays_one_word_in_the_unit() {
+        let mut s = spec(None);
+        s.data = "/srv/my data/100%/$HOME".into();
+        let u = systemd_unit(&s);
+        assert!(u.contains("\"/srv/my data/100%%/$$HOME\""), "{u}");
+    }
+
+    #[test]
+    fn arguments_that_could_change_a_unit_file_are_refused() {
+        let mut s = spec(None);
+        assert!(s.validate().is_ok());
+        s.data = "/srv/x\nExecStartPre=/bin/evil".into();
+        assert!(s.validate().is_err(), "a newline would add a directive");
+        s.data = "/srv/x\" --evil \"".into();
+        assert!(s.validate().is_err(), "a quote would end the word early");
+        let mut s = spec(Some("db; rm -rf"));
+        assert!(s.validate().is_err());
+        s.run_as = Some("service-user_1".into());
+        assert!(s.validate().is_ok());
     }
 
     #[test]

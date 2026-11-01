@@ -12,11 +12,12 @@
 //! * The browser is sent to the chosen redirect with the session token in the URL *fragment* (`#token=...`), which no
 //!   server or proxy ever receives or logs, or with `#error=<code>` when sign-in did not happen.
 
-use super::{ApiError, AppState};
+use super::{ApiError, AppState, Peer, client_ip};
 use crate::auth::Role;
 use crate::util::random_bytes;
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -111,11 +112,31 @@ pub async fn providers(State(st): State<AppState>) -> Json<Value> {
     Json(json!({ "providers": st.cfg.oauth.providers.keys().collect::<Vec<_>>() }))
 }
 
+/// One client address may begin or finish only so many sign-ins a minute, so it cannot fill the table of sign-ins in
+/// progress (and lock everyone else out) or hammer the provider through this server.
+fn throttle(st: &AppState, headers: &HeaderMap, peer: Peer) -> Result<(), ApiError> {
+    let ip = client_ip(headers, peer.0, st.cfg.trust_proxy);
+    if st.limiter.allow(
+        &format!("oauth:{ip}"),
+        st.cfg.login_attempts_per_minute * 2,
+        Duration::from_secs(60),
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::too_many(
+            "too many sign-in attempts; wait a minute and try again",
+        ))
+    }
+}
+
 pub async fn start(
     State(st): State<AppState>,
+    headers: HeaderMap,
+    peer: Peer,
     Path(name): Path<String>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, ApiError> {
+    throttle(&st, &headers, peer)?;
     let cfg = &st.cfg.oauth;
     let p = cfg
         .providers
@@ -264,9 +285,12 @@ fn finish(redirect: &str, fragment: String) -> Response {
 
 pub async fn callback(
     State(st): State<AppState>,
+    headers: HeaderMap,
+    peer: Peer,
     Path(name): Path<String>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, ApiError> {
+    throttle(&st, &headers, peer)?;
     // The state decides everything. Without a valid one there is nowhere safe to send the browser, so it is a plain error.
     let pending = {
         let mut m = st.oauth.pending.lock().unwrap_or_else(|e| e.into_inner());

@@ -6,6 +6,28 @@ PowerDB is one binary (`powerdb`, about 5 MB, dashboard embedded). Pick one.
 > The install scripts, the Dockerfile, the compose file, the service files and the release workflow **have not been run**:
 > no release exists yet, so treat each as unverified until you have run it.
 
+## Desktop app (macOS, Windows)
+**PowerDB Manager** installs and runs a PowerDB server on your own computer, with a window and a tray icon instead of a terminal:
+set up a database, start and stop it, watch its log, take and restore backups, and open the dashboard already signed in.
+
+- **macOS:** open `PowerDB_<version>_aarch64.dmg` (Apple silicon) or `..._x64.dmg` (Intel) and drag **PowerDB** to Applications.
+- **Windows:** run `PowerDB_<version>_x64-setup.exe`. It installs for the current user (no administrator rights) and adds a Start menu entry.
+
+On first start a short wizard creates a database in a folder you choose, picks a port and shows the administrator key once; the key is also
+kept in your system's credential store (macOS Keychain, Windows Credential Manager), which is how the app signs the dashboard in for you.
+Closing the window leaves the server running in the menu bar or system tray; **Quit** stops it cleanly first. If the app ever crashes, the
+server notices and shuts itself down, so a database is never left running unattended.
+
+> **These installers are not code-signed.** Signing needs a paid Apple Developer ID (plus notarization) and a Windows code-signing
+> certificate, which this project does not have yet. Expect a warning the first time:
+> on macOS, right-click the app and choose **Open** (or allow it under System Settings, Privacy & Security); on Windows, SmartScreen says
+> "Windows protected your PC": choose **More info**, then **Run anyway**. You can check a download is the file this project built:
+> compare its SHA-256 with `SHA256SUMS` on the release page, or run `gh attestation verify <file> --repo isagarpinninti/powerdb`.
+> The app makes no network connections of its own and does not update itself; download a newer installer to upgrade.
+
+The app uses the same `powerdb` server as everything else on this page, so a database made by the app can be served by `powerdb serve`
+and the other way round. Use the app for a personal or development database; use a service (below) or Docker for a server others depend on.
+
 ## From a release (macOS, Linux)
 ```bash
 POWERDB_REPO=owner/powerdb ./scripts/install.sh          # installs to ~/.local/bin, checks SHA256

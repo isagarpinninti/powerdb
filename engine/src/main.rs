@@ -380,6 +380,9 @@ async fn service_command(action: ServiceCmd) -> i32 {
                 addr,
                 run_as,
             };
+            if let Err(e) = spec.validate() {
+                return fail(e);
+            }
             #[cfg(target_os = "macos")]
             return report(service::install(&spec, print, user));
             #[cfg(not(target_os = "macos"))]

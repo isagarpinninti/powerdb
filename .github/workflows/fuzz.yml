@@ -32,3 +32,5 @@ jobs:
         with: { toolchain: stable }
       - name: Long deterministic fuzz with a fresh seed each week
         run: POWERDB_FUZZ_SEED=$(date +%s) POWERDB_FUZZ_ITERS=300000 cargo test --release --test fuzz -- --skip damaged_storage --skip a_tampered --skip random_http
+      - name: Damaged-storage fuzz, fresh seed
+        run: POWERDB_FUZZ_SEED=$(date +%s) POWERDB_FUZZ_ITERS=3000 cargo test --release --test fuzz damaged_storage
