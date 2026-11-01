@@ -780,3 +780,30 @@ fn compaction_never_deletes_the_segment_of_an_upload_that_is_still_being_staged(
     let report = db.verify(true).unwrap();
     assert!(report.problems.is_empty(), "{:?}", report.problems);
 }
+
+#[test]
+fn a_damaged_manifest_size_is_corruption_not_a_giant_allocation() {
+    let d = Dir::new();
+    let db = open(&d);
+    let bytes = data(400_000, 3);
+    let rec = db
+        .create(
+            "invoices",
+            fields("a", 1),
+            vec![("document".into(), stage(&db, &bytes))],
+        )
+        .unwrap();
+    let id = from_hex_32(&rec.files["document"].id).unwrap();
+    // flip the stored size to 76 GB, the way a damaged disk might, leaving the chunk list alone
+    let files = db.keyspace("files").unwrap();
+    let mut raw = files.get(id).unwrap().unwrap().to_vec();
+    raw[0..8].copy_from_slice(&76_504_105_280u64.to_le_bytes());
+    files.insert(id, raw).unwrap();
+    // before the fix this aborted the process (memory allocation of 76504105280 bytes failed)
+    let err = db.read_file(&id).map(|_| ()).expect_err("must refuse");
+    assert!(matches!(err, powerdb::Error::Corrupt(_)), "{err}");
+    assert!(
+        !db.verify(false).unwrap().problems.is_empty(),
+        "the checker must notice it too"
+    );
+}

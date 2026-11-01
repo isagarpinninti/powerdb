@@ -362,9 +362,25 @@ impl SegmentLog {
         Ok(f)
     }
 
+    /// Refuses a read that would run past the end of its segment. Only asked for big reads: lengths come from the index,
+    /// a damaged one could otherwise ask for gigabytes before the read fails.
+    fn within_segment(f: &File, end: u64, len: u64) -> Result<()> {
+        if len > (16 << 20) && end > f.metadata()?.len() {
+            return Err(Error::Corrupt(
+                "an index entry points past the end of its segment".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The stored (possibly encrypted) payload of one entry.
     pub fn read_payload(&self, p: &ChunkPtr) -> Result<Vec<u8>> {
         let f = self.reader(p.seg)?;
+        Self::within_segment(
+            &f,
+            p.off + HEADER + p.stored_len as u64,
+            p.stored_len as u64,
+        )?;
         let mut buf = vec![0u8; p.stored_len as usize];
         read_exact_at(&f, &mut buf, p.off + HEADER)?;
         Ok(buf)
@@ -376,6 +392,7 @@ impl SegmentLog {
             return Err(Error::Invalid("slice runs past the chunk".into()));
         }
         let f = self.reader(p.seg)?;
+        Self::within_segment(&f, p.off + HEADER + from as u64 + len as u64, len as u64)?;
         let mut buf = vec![0u8; len as usize];
         read_exact_at(&f, &mut buf, p.off + HEADER + from as u64)?;
         Ok(buf)

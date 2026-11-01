@@ -261,7 +261,7 @@ impl Manifest {
         if b.len() != 12 + n * 36 {
             return None;
         }
-        let chunks = (0..n)
+        let chunks: Vec<([u8; 32], u32)> = (0..n)
             .map(|i| {
                 let o = 12 + i * 36;
                 (
@@ -270,6 +270,12 @@ impl Manifest {
                 )
             })
             .collect();
+        // A file is exactly its chunks, so a size that disagrees is damage; trusting it would let a flipped bit
+        // ask for terabytes of memory.
+        let total: u64 = chunks.iter().map(|(_, l)| *l as u64).sum();
+        if total != size {
+            return None;
+        }
         Some(Self { size, chunks })
     }
     /// The file's id: a hash over its chunks, so equal content under the same codec is one file.

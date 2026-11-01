@@ -878,7 +878,8 @@ impl Db {
 
     pub fn read_file(&self, file_id: &[u8; 32]) -> Result<Vec<u8>> {
         let m = self.manifest(file_id)?;
-        let mut out = Vec::with_capacity(m.size as usize);
+        // not `m.size` up front: it is read back from disk, and growing as chunks arrive costs nothing real
+        let mut out = Vec::with_capacity((m.size as usize).min(64 << 20));
         self.read_file_range(&m, 0, m.size, &mut |b| {
             out.extend_from_slice(b);
             Ok(())

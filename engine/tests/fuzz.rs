@@ -380,13 +380,12 @@ fn stored_formats_reject_garbage_and_round_trip_what_they_accept() {
         80_000,
         |r| {
             let mut b = if r.pct(50) {
-                Manifest {
-                    size: r.next() >> 20,
-                    chunks: (0..r.below(5))
-                        .map(|_| ([r.next() as u8; 32], r.next() as u32))
-                        .collect(),
-                }
-                .to_bytes()
+                // a valid manifest's size is exactly the sum of its chunk lengths
+                let chunks: Vec<([u8; 32], u32)> = (0..r.below(5))
+                    .map(|_| ([r.next() as u8; 32], (r.next() >> 40) as u32))
+                    .collect();
+                let size = chunks.iter().map(|(_, l)| *l as u64).sum();
+                Manifest { size, chunks }.to_bytes()
             } else {
                 r.rand(300)
             };
