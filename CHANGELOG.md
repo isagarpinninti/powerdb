@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-01)
 - Storage: LSM records + content-defined chunked, deduplicated, refcounted file store; atomic record+file commits.
 - Security: rule expressions, ChaCha20-Poly1305 at rest, signed URLs, magic-byte validation, JWT/API keys, Argon2id.
 - API, TypeScript SDK, embedded React dashboard.
