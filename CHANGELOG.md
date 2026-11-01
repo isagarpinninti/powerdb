@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.2.0 (2026-11-01)
+## 0.2.1 (2026-11-01)
+- Same code as 0.2.0, which was never published: its release workflow built everything but failed to gather the installers. Fixed.
+
+## 0.2.0 (2026-11-01, not published)
 - Desktop app (PowerDB Manager): .dmg for macOS and an installer .exe for Windows; server manager, logs, backups, restore, integrity check, tray, dashboard in its own window, admin key in the OS credential store.
 - `powerdb service install|uninstall|start|stop|status`: Windows Service, launchd, systemd. Replaces the hand-written unit files.
 - OAuth2 sign-in (Google, GitHub, generic) with PKCE; SDK helpers.
