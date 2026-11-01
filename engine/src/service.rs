@@ -161,9 +161,12 @@ pub fn uninstall() -> Result<String, String> {
 #[cfg(target_os = "linux")]
 pub fn control(action: &str) -> Result<String, String> {
     match action {
-        "status" => run(Command::new("systemctl").args(["is-active", "powerdb"]))
-            .map(|s| s.trim().to_string())
-            .or_else(|e| Ok(e)),
+        // `is-active` exits non-zero for anything but "active", and prints the state either way
+        "status" => Ok(
+            match run(Command::new("systemctl").args(["is-active", "powerdb"])) {
+                Ok(s) | Err(s) => s.trim().to_string(),
+            },
+        ),
         a => run(Command::new("systemctl").args([a, "powerdb"])).map(|_| format!("{a} requested")),
     }
 }
