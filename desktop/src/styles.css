@@ -1,0 +1,9 @@
+@import "../../dashboard/src/styles.css";
+/* the shared components live in the dashboard; tell Tailwind to scan them too */
+@source "../../dashboard/src";
+
+/* a desktop window is not a web page: no text selection on chrome, no rubber-band scroll */
+html { overscroll-behavior: none; }
+.no-select { user-select: none; -webkit-user-select: none; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+.pulse { animation: pulse-dot 1.4s ease-in-out infinite; }

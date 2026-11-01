@@ -140,3 +140,90 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           & "$env:RUNNER_TEMP\powerdb\powerdb.exe" --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
+  desktop:
+    # The desktop app (PowerDB Manager): lifecycle tests against the real server, then build the installer, install it the
+    # way a user would, start it, and check the bundled server comes up and goes away again.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, bundle: dmg }
+          - { os: windows-2025, bundle: nsis }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with: { toolchain: stable }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: 22 }
+      - run: cargo build --locked --release
+      - run: npm ci
+        working-directory: desktop
+      - run: npm run typecheck
+        working-directory: desktop
+      - run: npm run sidecar
+        working-directory: desktop
+      - name: Manager lifecycle tests
+        working-directory: desktop/src-tauri
+        shell: bash
+        run: |
+          export POWERDB_BIN="$GITHUB_WORKSPACE/target/release/powerdb$([ "$RUNNER_OS" = Windows ] && echo .exe)"
+          cargo test --release --locked
+      - name: Build the installer
+        working-directory: desktop
+        run: npx tauri build --bundles ${{ matrix.bundle }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+      - name: Install, start, stop (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          hdiutil attach desktop/src-tauri/target/release/bundle/dmg/*.dmg -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg"
+          mkdir -p "$RUNNER_TEMP/apps" && cp -R "$RUNNER_TEMP/dmg/PowerDB.app" "$RUNNER_TEMP/apps/"
+          hdiutil detach "$RUNNER_TEMP/dmg"
+          DATA="$RUNNER_TEMP/data"; ./target/release/powerdb init "$DATA" >/dev/null
+          CFG="$HOME/Library/Application Support/dev.powerdb.desktop"; mkdir -p "$CFG"
+          printf '{"configured":true,"data_dir":"%s","port":8150,"auto_start_server":true}' "$DATA" > "$CFG/config.json"
+          open -n "$RUNNER_TEMP/apps/PowerDB.app" --args --hidden
+          for i in $(seq 1 30); do ./target/release/powerdb status --addr 127.0.0.1:8150 && break; sleep 2; done
+          ./target/release/powerdb status --addr 127.0.0.1:8150
+          osascript -e 'tell application id "dev.powerdb.desktop" to quit'
+          sleep 5
+          ! ./target/release/powerdb status --addr 127.0.0.1:8150
+          ./target/release/powerdb check --data "$DATA" --quick
+      - name: Install, start, stop, uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1).FullName
+          Start-Process -FilePath $installer -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'PowerDB'
+          Get-ChildItem $dir | Format-Table Name, Length
+          $app = Get-ChildItem $dir -Filter *.exe | Where-Object { $_.Name -notmatch 'uninstall|^powerdb\.exe$' } | Select-Object -First 1
+          $server = Join-Path $dir 'powerdb.exe'
+          if (-not (Test-Path $server)) { throw 'the installer did not install the bundled server' }
+          $data = Join-Path $env:RUNNER_TEMP 'data'
+          & $server init $data | Out-Null
+          $cfg = Join-Path $env:APPDATA 'dev.powerdb.desktop'
+          New-Item -ItemType Directory -Force $cfg | Out-Null
+          @{ configured = $true; data_dir = $data; port = 8150; auto_start_server = $true } | ConvertTo-Json | Set-Content (Join-Path $cfg 'config.json')
+          $p = Start-Process -FilePath $app.FullName -ArgumentList '--hidden' -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) { & $server status --addr 127.0.0.1:8150 2>$null; if ($LASTEXITCODE -eq 0) { $ok = $true; break }; Start-Sleep 2 }
+          if (-not $ok) { throw 'the app did not bring its server up' }
+          # a crashed manager must take its server with it (it closes the server's standard input)
+          Stop-Process -Id $p.Id -Force
+          Start-Sleep 6
+          & $server status --addr 127.0.0.1:8150 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'the server outlived the app' }
+          & $server check --data $data --quick
+          if ($LASTEXITCODE -ne 0) { throw 'the data folder was left locked or damaged' }
+          Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait
+          Start-Sleep 3
+          if (Test-Path $server) { throw 'uninstall left the server behind' }
