@@ -1,6 +1,6 @@
 {
   "name": "powerdb-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript/JavaScript client for PowerDB: records and files in one call, a chainable query builder, no runtime dependencies.",
   "license": "MIT",
   "type": "module",

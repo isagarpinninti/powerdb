@@ -54,17 +54,58 @@ jobs:
         run: |
           sha256sum powerdb-* > SHA256SUMS
           gh release create "${{ github.ref_name }}" powerdb-* SHA256SUMS --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
+  # One image per architecture, each built natively on its own runner (an emulated Rust build would take far longer),
+  # pushed by digest, then merged into a single multi-arch tag.
   docker:
     needs: build
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux/amd64, runner: ubuntu-24.04, slug: amd64 }
+          - { platform: linux/arm64, runner: ubuntu-24.04-arm, slug: arm64 }
+    runs-on: ${{ matrix.runner }}
     permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
       - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
-      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+      - name: Image name (registries require lower case)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
         with:
           context: .
-          push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }},ghcr.io/${{ github.repository }}:latest
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: digest-${{ matrix.slug }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+  docker-manifest:
+    needs: docker
+    runs-on: ubuntu-24.04
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: { path: /tmp/digests, pattern: "digest-*", merge-multiple: true }
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
+      - name: Create the multi-arch tags
+        working-directory: /tmp/digests
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create \
+            -t "$IMAGE:${{ github.ref_name }}" -t "$IMAGE:latest" \
+            $(printf "$IMAGE@sha256:%s " *)
+      - name: Show the result
+        run: docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }}"

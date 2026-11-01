@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 (2026-11-01)
+- Docker image is now multi-arch (linux/amd64 and linux/arm64), each built natively and merged into one tag.
+- CI builds and runs the container on both architectures: health check, API use, hot backup, and a clean stop/start.
+
 ## 0.1.0 (2026-11-01)
 - Storage: LSM records + content-defined chunked, deduplicated, refcounted file store; atomic record+file commits.
 - Security: rule expressions, ChaCha20-Poly1305 at rest, signed URLs, magic-byte validation, JWT/API keys, Argon2id.

@@ -33,3 +33,38 @@ jobs:
         working-directory: sdk
       - run: npm ci && npm run typecheck
         working-directory: dashboard
+  docker:
+    # Builds the image and runs it, on both architectures: the image is only worth shipping if a container actually starts.
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-24.04, ubuntu-24.04-arm] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: docker build -t powerdb:ci .
+      - name: Start it, wait for health, write and read data
+        run: |
+          docker run -d --name pdb -p 127.0.0.1:8090:8090 -v pdbdata:/data powerdb:ci
+          for i in $(seq 1 30); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' pdb)" = healthy ] && break
+            sleep 2
+          done
+          docker inspect -f 'health: {{.State.Health.Status}}' pdb
+          [ "$(docker inspect -f '{{.State.Health.Status}}' pdb)" = healthy ] || { docker logs pdb; exit 1; }
+          curl -fsS http://127.0.0.1:8090/api/v1/healthz; echo
+          KEY=$(docker logs pdb 2>&1 | grep -o 'pdb_live_[A-Za-z0-9_-]*' | head -1)
+          [ -n "$KEY" ] || { docker logs pdb; exit 1; }
+          curl -fsS -X POST -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+            http://127.0.0.1:8090/api/v1/collections \
+            -d '{"name":"t","rules":{},"fields":[{"name":"x","kind":"text"}]}' >/dev/null
+          curl -fsS -X POST -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+            http://127.0.0.1:8090/api/v1/maintenance/backups -d '{"name":"ci"}'; echo
+          echo "-- restart: the data and the lock must survive a clean stop (SIGTERM)"
+          docker stop -t 30 pdb
+          docker start pdb
+          for i in $(seq 1 30); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' pdb)" = healthy ] && break
+            sleep 2
+          done
+          curl -fsS -H "authorization: Bearer $KEY" http://127.0.0.1:8090/api/v1/collections | grep -q '"name":"t"'
+          docker exec pdb powerdb --version
