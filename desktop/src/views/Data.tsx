@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { readTheme } from '@dash/theme';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { Button, Spinner } from '@dash/ui';
 import { api, errorText } from '../api';
@@ -15,6 +16,10 @@ export function Data() {
   const [src, setSrc] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<string | null>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
+  // the dashboard follows this window's theme (it has its own storage, so it has to be told)
+  const sendTheme = useCallback(() => { frame.current?.contentWindow?.postMessage({ powerdb: 'theme', theme: readTheme() }, origin); }, [origin]);
+  useEffect(() => { window.addEventListener('powerdb-theme', sendTheme); return () => window.removeEventListener('powerdb-theme', sendTheme); }, [sendTheme]);
 
   useEffect(() => {
     setSrc(null); setError(null); setPhase('loading');
@@ -30,10 +35,11 @@ export function Data() {
       if (e.origin !== origin || !e.data || e.data.powerdb !== 'dashboard') return;
       logUi('info', `dashboard: ${e.data.state}`);
       setPhase(e.data.state === 'signed-in' ? 'ready' : 'signed-out');
+      if (e.data.state === 'signed-in') sendTheme();
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [origin]);
+  }, [origin, sendTheme]);
 
   useEffect(() => {
     if (!src || phase !== 'loading') return;
@@ -53,7 +59,7 @@ export function Data() {
 
   return (
     <div className="relative h-full w-full">
-      {src && <iframe title="PowerDB dashboard" src={src} className="h-full w-full border-0 bg-bg" onLoad={() => logUi('info', 'dashboard frame loaded')} />}
+      {src && <iframe ref={frame} title="PowerDB dashboard" src={src} className="h-full w-full border-0 bg-bg" onLoad={() => { logUi('info', 'dashboard frame loaded'); sendTheme(); }} />}
       {phase !== 'ready' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bg p-8 text-center" role={phase === 'loading' ? 'status' : 'alert'}>
           {phase === 'loading' && <div className="flex items-center gap-3 text-sm text-muted"><Spinner /> Opening your data…</div>}

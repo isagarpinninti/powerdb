@@ -120,10 +120,13 @@ enum Cmd {
         data: PathBuf,
         #[arg(long)]
         name: String,
-        #[arg(long, value_enum, default_value = "read")]
-        access: AccessArg,
+        /// read, write or read-write. Default: read, or read-write with --admin.
+        #[arg(long, value_enum)]
+        access: Option<AccessArg>,
+        /// Limit the key to this collection (repeatable). Default: all of them.
         #[arg(long = "collection")]
         collections: Vec<String>,
+        /// A key that bypasses collection rules, like an administrator account.
         #[arg(long)]
         admin: bool,
     },
@@ -306,7 +309,12 @@ async fn main() {
             let r = (|| -> powerdb::Result<String> {
                 let (st, _) =
                     server::build_state(&data, Options::default(), api::Config::default())?;
-                let a = match access {
+                // an administrative key always has full access, so asking for --admin alone means exactly that
+                let a = match access.unwrap_or(if admin {
+                    AccessArg::ReadWrite
+                } else {
+                    AccessArg::Read
+                }) {
                     AccessArg::Read => Access::Read,
                     AccessArg::Write => Access::Write,
                     AccessArg::ReadWrite => Access::ReadWrite,

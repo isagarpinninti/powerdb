@@ -1529,3 +1529,53 @@ async fn an_administrator_can_take_and_list_online_backups_and_nobody_else_can()
     drop(copy);
     let _ = std::fs::remove_dir_all(&restored);
 }
+
+#[tokio::test]
+async fn updating_a_collection_takes_the_whole_definition_and_the_name_comes_from_the_address() {
+    let a = app();
+    mk_collection(&a, invoices(json!({}), false)).await;
+    // no name in the body: the address supplies it
+    let mut def = invoices(json!({"list": "@request.auth.id != \"\""}), false);
+    def.as_object_mut().unwrap().remove("name");
+    let r = json(
+        &a,
+        Method::PATCH,
+        "/api/v1/collections/invoices",
+        Some(&a.admin),
+        def,
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&r.body)
+    );
+    assert_eq!(
+        r.json()["collection"]["rules"]["list"],
+        "@request.auth.id != \"\""
+    );
+    // a body that leaves out the fields is refused, never read as "remove them all"
+    let r = json(
+        &a,
+        Method::PATCH,
+        "/api/v1/collections/invoices",
+        Some(&a.admin),
+        json!({"rules": {"list": ""}}),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        String::from_utf8_lossy(&r.body)
+    );
+    let got = get(&a, "/api/v1/collections/invoices", Some(&a.admin))
+        .await
+        .json();
+    assert_eq!(
+        got["collection"]["fields"].as_array().unwrap().len(),
+        5,
+        "the fields are still there"
+    );
+}

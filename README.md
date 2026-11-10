@@ -1,41 +1,139 @@
 # PowerDB
 
-One database for structured records and the files that belong to them. A record and its files are stored by the same engine and become visible together or not at all.
+PowerDB is a database for records and the files that belong to them. It saves a record and its files in one step, so you do not end up with a record pointing at a file that never arrived, or a file that belongs to nothing.
 
-Status: **in development.** What exists, what is tested and what is still to build is listed in [docs/DESIGN.md](docs/DESIGN.md) and below; nothing here claims more than that.
+It is one program. It serves an HTTP API and a web dashboard from the same port, stores everything in a single folder, and runs on macOS, Windows and Linux. There is also a desktop app that installs and runs a local server for you. It is MIT licensed. It has no telemetry and no update checks; the only connections it makes on its own are to a sign-in provider such as Google, and only if you set one up.
 
-| Part | State |
-|---|---|
-| Storage engine (LSM metadata + content-defined chunk log, atomic commit, dedup, GC, compaction) | built, tested, `powerdb bench`; killed-writer crash test and a hot-backup stress test |
-| Security (chunk encryption, signed URLs, magic-byte checks, access rules, auth) | built, tested; fuzzed (rules language, upload checks, tokens, damaged storage, HTTP) |
-| HTTP API (CRUD, filter/sort/pagination, streaming uploads, ranged downloads, keys, throttling) | built, tested over the real router |
-| TypeScript SDK | built, tested against a real server process |
-| Dashboard (collections, schema builder, virtualized grid with image thumbnails, access-rule editor, code generator, users, keys, backups) | built, embedded in the binary; component tests run against a real server |
-| OAuth2 sign-in (Google, GitHub, generic) | built, tested against a mock provider that checks PKCE and the redirect rules; not run against the real services |
-| Desktop app (PowerDB Manager): `.dmg` for macOS, `.exe` installer for Windows | built; CI installs it, starts it and checks its server; unsigned (see [docs/INSTALL.md](docs/INSTALL.md)) |
-| Run as a service (Windows Service, launchd, systemd) | built; CI installs and drives each one on its own platform |
-| Hot backup, restore, integrity check, data-format migrations | built and tested (no real migration has run: only format 1 exists) |
+![The PowerDB app, Overview page](docs/screenshots/app-overview.webp)
+
+![The dashboard inside the app, showing collections](docs/screenshots/app-data.webp)
+
+## What it is for
+
+Think of the data behind an invoicing tool, a document manager, a small SaaS product or an internal admin app: rows with attachments, a few users, rules about who sees what. You would normally combine a relational database, an object store, a signed-URL service and some glue. PowerDB is those four things in one process, aimed at the case where you would rather run one thing.
+
+It is not a replacement for PostgreSQL. There are no joins, no SQL, and no clustering. A collection is a set of records with a fixed shape, queried by filtering and sorting.
+
+## What you get
+
+- **Records and files saved together.** A save either happens completely or not at all, including after a crash.
+- **Files stored once.** Files are cut into chunks and each chunk is stored once, so a file uploaded twice, or a new version of a file that mostly repeats the old one, costs little extra space.
+- **Rules.** Each collection says who may list, view, create, update and delete, in a short expression such as `@request.auth.id == owner_id`. A collection with no rules is usable by administrators only.
+- **Checks on uploads.** A file is judged by its first bytes, not its name: a program renamed to `photo.png` is refused. Size limits are enforced while the upload arrives.
+- **Encryption at rest** for the collections you choose, and short-lived signed links for downloads.
+- **Users, API keys and OAuth.** People sign in with email and password, or with Google or GitHub when you set that up. Programs use API keys that can be limited to some collections and to read or write.
+- **Backups that do not stop the server**, with restore and an integrity check.
+- **A TypeScript SDK** (`powerdb-sdk`, no dependencies) and a plain HTTP API.
+
+## Get it
+
+**Desktop app (macOS and Windows).** Download the `.dmg` or the setup `.exe` from the [latest release](https://github.com/isagarpinninti/powerdb/releases/latest). It runs a server on your computer and gives you a window to start and stop it, browse data, read logs and take backups.
+
+> The installers are **not code-signed** yet, so macOS and Windows will warn you the first time. [docs/INSTALL.md](docs/INSTALL.md) says how to get past the warning and how to check a download against its published checksum.
+
+**Command line (macOS, Linux, Windows).**
 
 ```bash
-cargo test --release                      # the whole suite, about a minute
-cargo run --release -- bench              # engine numbers for this machine (add --sync or --interval)
-cargo run --release -- serve              # API and dashboard on 127.0.0.1:8090; the first run prints an admin key
+powerdb init ./mydata               # creates the folder, prints an administrator key once
+powerdb serve --data ./mydata       # http://127.0.0.1:8090
 ```
 
-Access is locked by default: a collection with no rule for an action can be used only by an administrator. A rule is an expression such as
-`@request.auth.id != ""` (anyone signed in), `@request.auth.id == owner_id` (only the owner), or an empty string (public). Performance figures and what each durability mode risks are in [docs/DESIGN.md](docs/DESIGN.md).
+Install scripts are in `scripts/`, and a Docker image is published:
 
-## Dashboard
+```bash
+docker run -d -p 127.0.0.1:8090:8090 -v powerdb-data:/data ghcr.io/isagarpinninti/powerdb
+```
 
-`powerdb serve` serves the dashboard on the same port as the API. Sign in with the admin key printed on first start, or with an administrator account. The theme uses the same tokens as the hypout project (neutral zinc surfaces, amber only as an accent, dark by default, light on request or when the OS asks for it). To rebuild it: `cd dashboard && npm run build`, then `cargo build --release` (the compiled assets live in `engine/ui` and are embedded).
+To start it at boot, `powerdb service install` sets it up as a Windows Service, a launchd job or a systemd unit.
 
-Known gaps: PDFs show a labelled tile rather than a rendered thumbnail (that needs a PDF renderer); the dashboard is tested with a simulated DOM, not a real browser.
+## A first look
 
-## Install and operate
-- **Desktop (macOS, Windows):** download the `.dmg` or the setup `.exe` from the [latest release](https://github.com/isagarpinninti/powerdb/releases/latest).
-- **Command line (macOS, Linux, Windows):** `scripts/install.sh` / `scripts/install.ps1`, or `docker run ghcr.io/isagarpinninti/powerdb`.
-- **As a service:** `powerdb service install`.
+Create a collection, add a record with a file, and read it back:
 
-See [docs/INSTALL.md](docs/INSTALL.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md). The test suite runs in CI on Linux (x64, arm64), macOS (arm64, Intel)
-and Windows. Releases are checksummed and carry GitHub build-provenance attestations; **the installers are not code-signed**.
-What has been reviewed, and what has not, is in [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md): this is pre-1.0 software that has had no independent audit.
+```bash
+export KEY=pdb_live_...  H=http://127.0.0.1:8090/api/v1
+
+curl -X POST -H "authorization: Bearer $KEY" -H 'content-type: application/json' $H/collections -d '{
+  "name": "articles",
+  "fields": [{"name": "title", "kind": "text", "required": true},
+             {"name": "cover", "kind": "file", "mime": ["image/*"]}]}'
+
+curl -X POST -H "authorization: Bearer $KEY" $H/collections/articles/records \
+  -F 'data={"title":"Hello"};type=application/json' -F 'cover=@./photo.png;type=image/png'
+
+curl -G -H "authorization: Bearer $KEY" $H/collections/articles/records \
+  --data-urlencode 'filter=title ~ "Hello"' --data-urlencode 'sort=-created_at'
+```
+
+or from TypeScript:
+
+```ts
+import { PowerDB } from 'powerdb-sdk';
+
+const db = new PowerDB('http://127.0.0.1:8090', process.env.POWERDB_KEY);
+const post = await db.collection('articles').create({
+  title: 'Hello',
+  cover: { file: bytes, name: 'photo.png', type: 'image/png' },
+});
+const hello = await db.collection('articles').where`title ~ ${'Hello'}`.all();
+```
+
+**[docs/GUIDE.md](docs/GUIDE.md)** covers all of this properly: collections and fields, queries, files, rules, users and API keys, the SDK, backups, running it for real, and fixes for the problems people hit most. Every command in it was run against a real server.
+
+## How it works
+
+Records are kept in an LSM tree ([fjall](https://github.com/fjall-rs/fjall)). File bytes go to an append-only log of content-defined chunks (FastCDC, hashed with BLAKE3). A save stages the chunks first, then commits the record, the file's chunk list and the reference counts in one atomic batch. Deleted files are released in the background, and mostly-empty log segments are compacted. [docs/DESIGN.md](docs/DESIGN.md) has the details and the reasoning behind them, including the places where it chose to be simple.
+
+The server is Rust (axum, tokio, rustls). The dashboard and the desktop app are React, and the desktop app is a [Tauri](https://tauri.app) shell around them with the server bundled inside.
+
+## What has been measured
+
+On one Apple-silicon laptop, over the loopback interface, with every write flushed to disk before it is acknowledged (the default):
+
+- 3,000 records with files (181 MiB) written by 16 parallel clients: about 200 records a second, and all of them read back byte-identical.
+- A 1 GiB file: about 640 MiB/s uploading and 970 MiB/s downloading, with the server's memory staying under 80 MiB, so files stream and are not held in memory.
+- 5,000 records written, read and deleted by several clients while two hot backups and compaction ran: no errors, and both backups restored complete and passed the integrity check.
+- The server killed with `SIGKILL` in the middle of 12 parallel writers: every write it had acknowledged was still there, with the right bytes.
+
+These are single-machine numbers from this project's own tests, not a benchmark against anything else.
+
+## Where it stands
+
+PowerDB is **pre-1.0 software**. The test suite runs on every push on Linux (x64 and arm64), macOS (Apple silicon and Intel) and Windows, and the install scripts, the service installation and the desktop installers are exercised there too. It is fuzzed, and the crash behaviour is tested by killing the process.
+
+Things it has **not** had, and that you should weigh before trusting it with data you cannot replace:
+
+- No independent security review. [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md) lists what the author checked and found, and what is open.
+- No test of power loss. The crash tests kill the process; they cannot show what a disk does with unflushed writes.
+- OAuth sign-in is tested against a stand-in provider, not yet against Google or GitHub themselves.
+- The installers are not code-signed.
+- There is one on-disk format so far, so upgrades between formats have never run on real data.
+
+Report security problems privately, as described in [SECURITY.md](SECURITY.md).
+
+## Building it
+
+You need Rust (stable) and, to work on the dashboard or app, Node 22 or newer.
+
+```bash
+cargo build --release                     # the server: target/release/powerdb
+cargo test --release                      # the server's tests, about a minute
+
+cd dashboard && npm ci && npm test        # dashboard tests, against a real server
+cd sdk && npm ci && npm test              # SDK tests
+cd desktop && npm ci && npm run sidecar && npx tauri build    # the desktop app
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest, including how to run the fuzzers. `tools/demo-data.py` fills a server with sample data, and `tools/screenshots.mjs` takes the screenshots above from it.
+
+## Documentation
+
+- [Using PowerDB](docs/GUIDE.md): the how-to guide
+- [Installing](docs/INSTALL.md): every way to install and run it
+- [Operating PowerDB](docs/OPERATIONS.md): TLS, backups, upgrades, monitoring, hardening
+- [Design](docs/DESIGN.md): how it is built, and what it does not do
+- [Security review](docs/SECURITY-REVIEW.md), [Changelog](CHANGELOG.md)
+
+## License
+
+MIT. See [LICENSE](LICENSE).

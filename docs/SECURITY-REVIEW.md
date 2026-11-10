@@ -22,8 +22,8 @@ libFuzzer targets in `fuzz/`). Platform-specific code is exercised in CI on Linu
 ## Designed in (and tested)
 - **OAuth:** authorization-code flow with PKCE; single-use, provider-bound, expiring state; exact-match redirect allow-list (no open redirect);
   token in the URL fragment; verified emails only; administrators excluded unless `allow_admin`; accounts created only with open registration.
-- **Desktop app:** the admin key lives in the OS credential store, not in a file. The Manager window's permissions are limited to dialogs and
-  revealing a file; the dashboard window shows a page from the local server and is granted none. The key reaches that page only in the URL
+- **Desktop app:** the admin key lives in the OS credential store, not in a file. The app window's permissions are limited to dialogs, revealing a file,
+  and opening this project's page or the local server; the dashboard it embeds is a page from the local server and is granted none. The key reaches that page only in the URL
   fragment. The app opens no network connections other than to its own loopback server.
 - **Backups:** written only under the configured backup directory; names are restricted to `[A-Za-z0-9._-]` and cannot start with a dot.
 - **Docker:** the entrypoint drops to an unprivileged user after fixing ownership of the data folder; `chown -R` does not follow symlinks.

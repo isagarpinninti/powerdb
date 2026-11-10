@@ -57,7 +57,7 @@ export function Shell() {
     setBusy(true);
     try { await api[what](); } catch (e) { toast(errorText(e), 'err'); } finally { setBusy(false); }
   }, [toast]);
-  const flip = useCallback(() => { const t: Theme = readTheme() === 'dark' ? 'light' : 'dark'; applyTheme(t); setTheme(t); }, []);
+  const flip = useCallback(() => { const t: Theme = readTheme() === 'dark' ? 'light' : 'dark'; applyTheme(t); setTheme(t); window.dispatchEvent(new Event('powerdb-theme')); }, []);
 
   const commands = useMemo<Command[]>(() => [
     ...sections.map((s, i) => ({ id: `go-${s.id}`, label: s.label, icon: s.icon, group: 'Go to' as const, shortcut: `${mod}${i + 1}`, run: () => setView(s.id) })),

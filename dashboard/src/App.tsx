@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { CollectionDef } from '@sdk';
 import { Logo } from './Logo';
 import { applyTheme, readTheme } from './theme';
-import { db, useSession } from './session';
+import { DESKTOP_ORIGINS, db, embedded, useSession } from './session';
 import { Button, ErrorBox, Spinner, cn } from './ui';
 import { CollectionView } from './views/CollectionView';
 import { Keys } from './views/Keys';
@@ -40,17 +40,30 @@ export function App() {
   }, []);
   useEffect(() => { if (identity) void refresh(); }, [identity, refresh]);
 
+  // Inside the PowerDB desktop app the app supplies the logo, sign-out and theme switch, and tells this page which theme to use.
+  useEffect(() => {
+    if (!embedded) return;
+    const onMessage = (e: MessageEvent) => {
+      if (!DESKTOP_ORIGINS.includes(e.origin) || e.data?.powerdb !== 'theme') return;
+      if (e.data.theme === 'light' || e.data.theme === 'dark') applyTheme(e.data.theme);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   if (!identity) return <Login />;
 
   const item = (active: boolean) => cn('flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm transition-colors', active ? 'bg-raised font-medium text-ink' : 'text-muted hover:bg-raised hover:text-ink');
 
   return (
     <div className="flex h-full">
-      <aside className="flex w-64 shrink-0 flex-col bg-surface text-ink border-r border-line" aria-label="Navigation">
-        <button className="flex items-center gap-3 px-5 py-5" onClick={() => setNav({ page: 'home' })}>
-          <Logo size={30} />
-          <span className="text-lg font-bold tracking-tight text-ink">PowerDB</span>
-        </button>
+      <aside className={cn('flex shrink-0 flex-col bg-surface text-ink border-r border-line', embedded ? 'w-56' : 'w-64')} aria-label="Navigation">
+        {embedded ? <div className="h-4" /> : (
+          <button className="flex items-center gap-3 px-5 py-5" onClick={() => setNav({ page: 'home' })}>
+            <Logo size={30} />
+            <span className="text-lg font-bold tracking-tight text-ink">PowerDB</span>
+          </button>
+        )}
         <nav className="flex-1 space-y-6 overflow-y-auto px-3 pb-4">
           <div>
             <div className="mb-1 flex items-center justify-between px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
@@ -73,6 +86,7 @@ export function App() {
             <button className={item(nav.page === 'system')} onClick={() => setNav({ page: 'system' })}>System</button>
           </div>
         </nav>
+        {!embedded && (
         <div className="space-y-2 border-t border-line p-4 text-xs">
           <div className="truncate text-faint" title={identity.label}>{identity.label}</div>
           <div className="flex gap-2">
@@ -80,6 +94,7 @@ export function App() {
             <Button small variant="ghost" className="!text-muted hover:!bg-raised hover:!text-ink" onClick={logout}>Sign out</Button>
           </div>
         </div>
+        )}
       </aside>
       <main className="min-w-0 flex-1 overflow-hidden">
         <div className="h-full overflow-auto">
@@ -99,7 +114,7 @@ export function App() {
 function Home({ collections, go }: { collections: CollectionDef[] | null; go: (n: Nav) => void }) {
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-10">
-      <h1 className="text-2xl font-bold">Welcome to PowerDB</h1>
+      <h1 className="text-2xl font-bold">Collections</h1>
       <p className="text-muted">
         Records and the files that belong to them live in one database, and a record appears together with its files or not at all. Collections are <b>locked</b> until you give them rules: until then only administrators can read or write them.
       </p>

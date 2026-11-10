@@ -36,7 +36,10 @@ async function identify(): Promise<Identity> {
 }
 
 /** When the dashboard is shown inside the PowerDB desktop app, tell that window how sign-in went (it shows progress or an error). Only its own origins are addressed. */
-const DESKTOP_ORIGINS = ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'];
+export const DESKTOP_ORIGINS = ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'];
+/** True when this page is shown inside another page: in practice, the PowerDB desktop app's Data section. */
+export const embedded = window.parent !== window;
+
 function notifyDesktop(state: 'signed-in' | 'signed-out'): void {
   if (window.parent === window) return;
   for (const origin of DESKTOP_ORIGINS) {

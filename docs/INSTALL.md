@@ -7,8 +7,8 @@ PowerDB is one binary (`powerdb`, about 5 MB, dashboard embedded). Pick one.
 > no release exists yet, so treat each as unverified until you have run it.
 
 ## Desktop app (macOS, Windows)
-**PowerDB Manager** installs and runs a PowerDB server on your own computer, with a window and a tray icon instead of a terminal:
-set up a database, start and stop it, watch its log, take and restore backups, and open the dashboard already signed in.
+**PowerDB** (the desktop app) installs and runs a server on your own computer, with a window and a tray icon instead of a terminal:
+set up a database, start and stop it, browse your data, watch the log, and take and restore backups.
 
 - **macOS:** open `PowerDB_<version>_aarch64.dmg` (Apple silicon) or `..._x64.dmg` (Intel) and drag **PowerDB** to Applications.
 - **Windows:** run `PowerDB_<version>_x64-setup.exe`. It installs for the current user (no administrator rights) and adds a Start menu entry.

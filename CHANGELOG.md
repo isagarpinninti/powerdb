@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+- One application: the dashboard is the app's **Data** section, not a separate window.
+- New app layout: grouped sidebar, command palette (Cmd/Ctrl+K), always-visible status bar, health overview, log levels.
+- Security: a panicking request handler no longer takes the whole server down (the release profile unwinds, one request gets a 500);
+  stalled uploads are cut off (body idle timeout) and JSON requests have a deadline; API answers are `no-store`; HSTS when serving TLS;
+  the app's permission to open URLs is limited to this project and the local server.
+- The app no longer blocks on the Keychain while drawing its window (it showed a blank window while macOS asked for permission).
+- The server no longer aborts or hangs on shutdown when its log pipe has gone (it did when the app that started it crashed).
+- `PATCH /collections/{name}`: the name comes from the address; a body without `fields` is refused (it would have erased the schema).
+- `powerdb create-key --admin` now means full access by itself (it used to fail on its own default).
+- Docs: a how-to guide whose commands were all run against a real server; README rewritten; screenshots and the tools that take them.
+
 ## 0.2.1 (2026-11-01)
 - Same code as 0.2.0, which was never published: its release workflow built everything but failed to gather the installers. Fixed.
 

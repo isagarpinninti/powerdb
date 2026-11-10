@@ -83,9 +83,24 @@ pub async fn update_collection(
     State(st): State<AppState>,
     Caller(who): Caller,
     Path(name): Path<String>,
-    Json(mut def): Json<CollectionDef>,
+    Json(mut body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     admin(&who)?;
+    // The name is in the address, so the body need not repeat it. The rest is the whole definition, not a patch: leaving out
+    // `fields` is an error rather than a way to erase them.
+    if let Some(o) = body.as_object_mut() {
+        if !o.contains_key("fields") {
+            return Err(ApiError::bad_request(
+                "the body must include `fields`: this replaces the whole definition, and leaving them out would erase the schema",
+            ));
+        }
+        o.insert("name".into(), Value::String(name.clone()));
+    }
+    let mut def: CollectionDef = serde_json::from_value(body).map_err(|e| {
+        ApiError::bad_request(&format!(
+            "the body must be the whole collection definition (fields and rules): {e}"
+        ))
+    })?;
     def.name = name;
     check_rules(&def)?;
     let db = st.db.clone();

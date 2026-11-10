@@ -14,7 +14,8 @@ export const mockListen = (k: string, f: (v: unknown) => void) => {
 let status: Status = scenario === 'stopped' ? { phase: 'stopped', pid: null, since: null, message: null }
   : scenario === 'failed' ? { phase: 'failed', pid: null, since: null, message: 'the server exited unexpectedly (exit status: 1). powerdb: conflict: /Users/me/Library/Application Support/PowerDB/data is in use by another PowerDB process; stop it first' }
   : { phase: 'running', pid: 4242, since: Date.now() - 2 * 3600_000 - 14 * 60_000, message: null };
-const config = { configured: scenario !== 'setup', data_dir: '/Users/me/Library/Application Support/PowerDB/data', port: 8090, auto_start_server: true };
+const q = new URLSearchParams(location.search);
+const config = { configured: scenario !== 'setup', data_dir: '/Users/me/Library/Application Support/PowerDB/data', port: Number(q.get('port')) || 8090, auto_start_server: true };
 const logs = [
   '2026-11-01T09:12:03Z  INFO powerdb: PowerDB 0.1.1 listening on http://127.0.0.1:8090 (data: /Users/me/Library/Application Support/PowerDB/data)',
   '2026-11-01T09:12:03Z  INFO powerdb::server: maintenance thread started',
@@ -42,7 +43,7 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
     case 'create_backup': { const b = { name: `backup-${Date.now()}`, files: 31, bytes: 48_300_000 }; backups.unshift({ ...b, created_at: Date.now(), includes_secret: false, powerdb_version: '0.1.1' }); return JSON.stringify(b); }
     case 'run_check': return '3 records, 3 files, 41 chunks, 183.2 MiB of chunk data re-read and verified\nNo problems found.';
     case 'restore_backup': return `Restored 31 files into ${String(args.target)} and the integrity check passed.`;
-    case 'dashboard_url': return 'http://127.0.0.1:8090/#key=pdb_live_mock';
+    case 'dashboard_url': return q.get('dash') ?? `http://127.0.0.1:${config.port}/#key=pdb_live_mock`;
     case 'reveal_key': return 'pdb_live_Zx3Qk9v2mR7sT1nLhY4cWdPaB8eUfJgO5iKqNtVyXAs';
     default: return undefined;
   }
