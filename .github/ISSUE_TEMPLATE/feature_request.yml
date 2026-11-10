@@ -1,0 +1,11 @@
+name: Feature request
+description: Something PowerDB does not do that you need
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes: { label: What are you trying to do, description: The situation first, not the feature. }
+    validations: { required: true }
+  - type: textarea
+    id: now
+    attributes: { label: What do you do today instead }

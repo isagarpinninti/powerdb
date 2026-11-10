@@ -1,0 +1,32 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security problem, do not open an issue: use "Report a vulnerability" on the Security tab (see SECURITY.md).
+  - type: input
+    id: version
+    attributes: { label: PowerDB version, description: "Output of `powerdb --version`, or the app's About page", placeholder: "powerdb 0.2.1" }
+    validations: { required: true }
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it?
+      options: [Desktop app, Command line, Docker, Windows Service / systemd / launchd, SDK or API from my own code]
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes: { label: Operating system, placeholder: "macOS 15.1 (Apple silicon) / Windows 11 / Ubuntu 24.04" }
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: What you did, what you expected, and what you saw instead. }
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "From the app's Logs page, or the server's output. In the desktop app also frontend.log from the settings folder. Remove any administrator keys (pdb_live_...) before pasting."
+      render: text

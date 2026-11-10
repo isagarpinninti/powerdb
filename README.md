@@ -130,9 +130,10 @@ cd desktop && npm ci && npm run sidecar && npx tauri build    # the desktop app
 
 - [Using PowerDB](docs/GUIDE.md): the how-to guide
 - [Installing](docs/INSTALL.md): every way to install and run it
-- [Operating PowerDB](docs/OPERATIONS.md): TLS, backups, upgrades, monitoring, hardening
+- [Operating PowerDB](docs/OPERATIONS.md): TLS, backups, upgrades, monitoring
+- [Hardening a deployment](docs/HARDENING.md): a checklist for running it where people depend on it
 - [Design](docs/DESIGN.md): how it is built, and what it does not do
-- [Security review](docs/SECURITY-REVIEW.md), [Changelog](CHANGELOG.md)
+- [Security review](docs/SECURITY-REVIEW.md), [Changelog](CHANGELOG.md), [Making a release](RELEASING.md), [Third-party licences](THIRD_PARTY_NOTICES.md)
 
 ## License
 
