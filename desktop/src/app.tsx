@@ -47,7 +47,7 @@ export function AppProvider({ children, fallback }: { children: ReactNode; fallb
     return (
       <div className="flex h-full items-center justify-center p-8" role="alert">
         <div className="max-w-lg space-y-3 rounded-lg border border-line bg-surface p-6">
-          <div className="text-lg font-bold">PowerDB Manager could not read its state</div>
+          <div className="text-lg font-bold">PowerDB could not read its state</div>
           <pre className="whitespace-pre-wrap text-sm text-danger">{error}</pre>
           <button className="rounded-md border border-line-strong bg-raised px-3.5 py-2 text-sm font-medium" onClick={() => void refresh()}>Try again</button>
         </div>

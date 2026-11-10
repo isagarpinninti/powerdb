@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Manager as _, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;
 
 pub struct AppState {
@@ -315,25 +315,14 @@ pub fn logs(state: State<'_, AppState>) -> Vec<String> {
     state.manager.logs()
 }
 
-/// Opens the dashboard in its own window, already signed in (the key travels in the URL fragment, which no server ever receives).
+/// The address of the dashboard, already signed in (the key travels in the URL fragment, which no server receives). The
+/// Manager shows it inside its own window, so there is one application, not two.
 #[tauri::command]
-pub async fn open_dashboard(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn dashboard_url(state: State<'_, AppState>) -> Result<String, String> {
     let c = state.cfg();
     let (keys, dir) = (state.keys.clone(), c.data_dir.clone());
     let key = blocking(move || config::key_for(&keys, &dir, Duration::from_secs(25))).await?;
-    let url = format!("http://127.0.0.1:{}/#key={key}", c.port)
-        .parse()
-        .map_err(|e| format!("{e}"))?;
-    if let Some(w) = app.get_webview_window("dashboard") {
-        let _ = w.close();
-    }
-    WebviewWindowBuilder::new(&app, "dashboard", WebviewUrl::External(url))
-        .title("PowerDB Dashboard")
-        .inner_size(1280.0, 820.0)
-        .min_inner_size(900.0, 600.0)
-        .build()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(format!("http://127.0.0.1:{}/#key={key}", c.port))
 }
 
 fn api_call(

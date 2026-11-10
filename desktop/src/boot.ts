@@ -13,7 +13,7 @@ export function showFatal(msg: string): void {
   box.setAttribute('role', 'alert');
   box.style.cssText = 'padding:32px;font:14px/1.5 system-ui,sans-serif;max-width:640px;margin:10vh auto;color:#fafafa;background:#0a0a0b;border:1px solid #27272d;border-radius:12px';
   const h = document.createElement('div');
-  h.textContent = 'PowerDB Manager could not start its interface';
+  h.textContent = 'PowerDB could not start its interface';
   h.style.cssText = 'font-weight:700;font-size:18px;margin-bottom:8px';
   const p = document.createElement('pre');
   p.textContent = msg;

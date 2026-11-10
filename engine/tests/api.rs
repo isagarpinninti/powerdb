@@ -1357,8 +1357,30 @@ async fn errors_are_json_and_leak_nothing_and_the_dashboard_is_served() {
         ui.headers[header::CONTENT_SECURITY_POLICY]
             .to_str()
             .unwrap()
-            .contains("frame-ancestors 'none'")
+            .contains("frame-ancestors 'self' tauri://localhost http://tauri.localhost https://tauri.localhost")
     );
+    assert!(
+        !ui.headers[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors *"),
+        "only the desktop app's own origins may frame the dashboard"
+    );
+    assert!(
+        !ui.headers.contains_key("x-frame-options"),
+        "the dashboard page is framable by the desktop app, so it carries no X-Frame-Options (which cannot name an origin)"
+    );
+    // everything else stays unframeable: the API, errors and downloads
+    for uri in ["/api/v1/healthz", "/api/v1/collections", "/api/v1/nope"] {
+        let r = get(&a, uri, None).await;
+        assert_eq!(
+            r.headers
+                .get("x-frame-options")
+                .map(|v| v.to_str().unwrap()),
+            Some("DENY"),
+            "{uri}"
+        );
+    }
     assert_eq!(
         get(&a, "/some/client/route", None).await.status,
         StatusCode::OK,

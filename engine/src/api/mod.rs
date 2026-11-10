@@ -240,6 +240,23 @@ pub fn authorize(
     }
 }
 
+/// Nothing this server sends may be framed by another site, except the dashboard page for the desktop app. The dashboard
+/// is the one response that carries its own Content-Security-Policy (with a `frame-ancestors` list), so every other
+/// response gets `X-Frame-Options: DENY`.
+async fn frame_policy(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    if !res.headers().contains_key(header::CONTENT_SECURITY_POLICY) {
+        res.headers_mut().insert(
+            header::HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        );
+    }
+    res
+}
+
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -301,10 +318,7 @@ pub fn router(state: AppState) -> Router {
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
         ))
-        .layer(SetResponseHeaderLayer::if_not_present(
-            header::HeaderName::from_static("x-frame-options"),
-            HeaderValue::from_static("DENY"),
-        ));
+        .layer(axum::middleware::from_fn(frame_policy));
     if !state.cfg.cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = state
             .cfg

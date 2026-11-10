@@ -3,11 +3,13 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { Badge, Button, Card, CopyButton, fmtBytes, useToast } from '@dash/ui';
 import { api, errorText, type Stats } from '../api';
 import { useApp } from '../app';
+import { useNav } from '../nav';
 import { Dot, ErrorLine, Page, Section, fileManager, phaseLabel, uptime } from '../common';
 
 export function Overview() {
   const { snap, status } = useApp();
   const toast = useToast();
+  const go = useNav();
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +36,7 @@ export function Overview() {
 
   return (
     <Page title="Server" subtitle="The PowerDB server running on this computer."
-      actions={<Button variant="primary" disabled={!running} onClick={() => act(api.openDashboard)}>Open Dashboard</Button>}>
+      actions={<Button variant="primary" disabled={!running} onClick={() => go('data')}>Browse data</Button>}>
       <Card className="p-6">
         <div className="flex items-start justify-between gap-6">
           <div className="flex items-center gap-4">

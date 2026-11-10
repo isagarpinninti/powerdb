@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { PowerDB, PowerDBError } from '@sdk';
 
 export const db = new PowerDB(window.location.origin);
@@ -35,6 +35,15 @@ async function identify(): Promise<Identity> {
   return { label: `key: ${key.name}`, kind: 'key' };
 }
 
+/** When the dashboard is shown inside the PowerDB desktop app, tell that window how sign-in went (it shows progress or an error). Only its own origins are addressed. */
+const DESKTOP_ORIGINS = ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'];
+function notifyDesktop(state: 'signed-in' | 'signed-out'): void {
+  if (window.parent === window) return;
+  for (const origin of DESKTOP_ORIGINS) {
+    try { window.parent.postMessage({ powerdb: 'dashboard', state }, origin); } catch { /* not that origin */ }
+  }
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [ready, setReady] = useState(false);
@@ -61,6 +70,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       throw e;
     }
   }, []);
+
+  useEffect(() => { if (ready) notifyDesktop(identity ? 'signed-in' : 'signed-out'); }, [ready, identity]);
 
   const value: Session = {
     identity,

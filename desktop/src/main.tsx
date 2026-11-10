@@ -12,7 +12,7 @@ initTheme();
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ToastProvider>
-      <AppProvider fallback={<div className="flex h-full items-center justify-center gap-3 text-sm text-muted"><Spinner /> Starting PowerDB Manager…</div>}>
+      <AppProvider fallback={<div className="flex h-full items-center justify-center gap-3 text-sm text-muted"><Spinner /> Starting PowerDB…</div>}>
         <Shell />
       </AppProvider>
     </ToastProvider>

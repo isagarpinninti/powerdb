@@ -18,6 +18,7 @@ export const invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise
   : (cmd, args) => import('./mock').then((m) => m.mockInvoke(cmd, args) as never);
 
 export const onStatus = (f: (s: Status) => void) => inApp ? listen<Status>('server-status', (e) => f(e.payload)) : import('./mock').then((m) => m.mockListen('server-status', f as never));
+export const onGoto = (f: (view: string) => void) => inApp ? listen<string>('goto', (e) => f(e.payload)) : Promise.resolve(() => {});
 export const onLog = (f: (l: string) => void) => inApp ? listen<string>('server-log', (e) => f(e.payload)) : import('./mock').then((m) => m.mockListen('server-log', f as never));
 
 export const api = {
@@ -29,7 +30,7 @@ export const api = {
   restart: () => invoke<void>('restart_server'),
   saveSettings: (port: number, autoStartServer: boolean, startAtLogin: boolean) => invoke<void>('save_settings', { port, autoStartServer, startAtLogin }),
   logs: () => invoke<string[]>('logs'),
-  openDashboard: () => invoke<void>('open_dashboard'),
+  dashboardUrl: () => invoke<string>('dashboard_url'),
   stats: async () => JSON.parse(await invoke<string>('server_stats')) as Stats,
   backups: async () => (JSON.parse(await invoke<string>('list_backups')) as { backups: BackupInfo[] }).backups,
   backup: async (deep: boolean) => JSON.parse(await invoke<string>('create_backup', { deep })) as { name: string; files: number; bytes: number },

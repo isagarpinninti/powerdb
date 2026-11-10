@@ -130,9 +130,9 @@ pub fn run() {
                 MenuItem::with_id(app, "status", "Server stopped", false, None::<&str>)?;
             let toggle = MenuItem::with_id(app, "toggle", "Start Server", true, None::<&str>)?;
             let dashboard =
-                MenuItem::with_id(app, "dashboard", "Open Dashboard", false, None::<&str>)?;
+                MenuItem::with_id(app, "dashboard", "Browse Data", false, None::<&str>)?;
             let manager_item =
-                MenuItem::with_id(app, "manager", "Open PowerDB Manager", true, None::<&str>)?;
+                MenuItem::with_id(app, "manager", "Open PowerDB", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit PowerDB", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
@@ -161,11 +161,8 @@ pub fn run() {
             tray.on_menu_event(|app, event| match event.id.as_ref() {
                 "manager" => show_main(app),
                 "dashboard" => {
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let st = app.state::<AppState>();
-                        let _ = commands::open_dashboard(app.clone(), st).await;
-                    });
+                    show_main(app);
+                    let _ = app.emit_to("main", "goto", "data");
                 }
                 "toggle" => {
                     let app = app.clone();
@@ -201,9 +198,22 @@ pub fn run() {
                 webview.app_handle(),
                 &format!("page {:?}: {}", payload.event(), payload.url()),
             );
+            // `PowerDB --view=data` opens straight to a section (server, data, backups, logs, settings, about)
+            if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && let Some(view) =
+                    std::env::args().find_map(|a| a.strip_prefix("--view=").map(str::to_string))
+                && ["server", "data", "backups", "logs", "settings", "about"]
+                    .contains(&view.as_str())
+            {
+                let app = webview.app_handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(800)); // let the interface register its listener
+                    let _ = app.emit_to("main", "goto", view);
+                });
+            }
         })
         .on_window_event(|window, event| {
-            // Closing the Manager window leaves the server running in the tray, as a database server should.
+            // Closing the window leaves the server running in the tray, as a database server should.
             if let WindowEvent::CloseRequested { api, .. } = event
                 && window.label() == "main"
             {
@@ -220,7 +230,7 @@ pub fn run() {
             commands::restart_server,
             commands::save_settings,
             commands::logs,
-            commands::open_dashboard,
+            commands::dashboard_url,
             commands::server_stats,
             commands::list_backups,
             commands::create_backup,

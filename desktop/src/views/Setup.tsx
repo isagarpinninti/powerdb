@@ -65,7 +65,7 @@ export function Setup() {
         <div className="mx-auto max-w-xl space-y-6">
           {step === 0 && (
             <>
-              <div><h2 className="text-3xl font-bold tracking-tight">Welcome</h2><p className="mt-2 text-muted">PowerDB Manager sets up and runs a database server on this computer. A record and its files are stored together and become visible together, or not at all.</p></div>
+              <div><h2 className="text-3xl font-bold tracking-tight">Welcome</h2><p className="mt-2 text-muted">PowerDB sets up and runs a database server on this computer. A record and its files are stored together and become visible together, or not at all.</p></div>
               <Card className="divide-y divide-line text-sm">
                 {[['Runs locally', 'The server listens on this computer only. Nothing leaves it.'], ['One folder', 'All data lives in a single folder you choose, easy to back up.'], ['Nothing to configure', 'Start, stop, back up and restore from this window or the tray icon.']].map(([t, d]) => (
                   <div key={t} className="px-5 py-3.5"><div className="font-medium">{t}</div><div className="text-muted">{d}</div></div>))}

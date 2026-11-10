@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PowerDB Manager",
+        "title": "PowerDB",
         "width": 1040,
         "height": 700,
         "minWidth": 860,
@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:* http://localhost:*; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {
@@ -31,7 +31,7 @@
     "targets": ["dmg", "app", "nsis"],
     "category": "DeveloperTool",
     "shortDescription": "Run and manage a local PowerDB server",
-    "longDescription": "PowerDB Manager installs and runs a PowerDB server on this computer: start and stop it, open the dashboard, see its log, take and restore backups.",
+    "longDescription": "PowerDB installs and runs a database server on this computer: start and stop it, open the dashboard, see its log, take and restore backups.",
     "copyright": "Copyright (c) 2026 Sagar Pinninti. MIT License.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "externalBin": ["binaries/powerdb"],

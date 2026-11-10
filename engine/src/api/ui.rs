@@ -9,7 +9,10 @@ use rust_embed::RustEmbed;
 #[folder = "ui/"]
 struct Assets;
 
-const CSP: &str = "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+/// The dashboard may be shown inside the PowerDB desktop app's window (whose pages come from `tauri://localhost`, or
+/// `http(s)://tauri.localhost` on Windows) and nowhere else: no other website can frame it. The API and every download keep
+/// `X-Frame-Options: DENY` (see `frame_policy`).
+const CSP: &str = "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'self' tauri://localhost http://tauri.localhost https://tauri.localhost; base-uri 'none'; form-action 'self'";
 
 pub async fn serve(method: axum::http::Method, uri: Uri) -> Response {
     // Static files are read-only: any other method is a mistake or a probe, not a request the page can answer.
