@@ -207,6 +207,7 @@ impl Settings {
             cors_origins: cors,
             max_upload_bytes: cli.max_upload_gib.or(file.max_upload_gib).unwrap_or(5) << 30,
             backup_dir: file.backup_dir.clone(),
+            hsts: file.tls_cert.is_some() || cli.tls_cert.is_some(),
             oauth: match &file.oauth {
                 Some(o) => resolve_oauth(o)?,
                 None => Default::default(),

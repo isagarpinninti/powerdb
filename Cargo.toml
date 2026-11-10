@@ -12,4 +12,6 @@ version = "0.2.1"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# not "abort": a bug that panics while serving one request must not take the whole server (and every other client) down;
+# the panic is caught per request (see api::router) and answered with a 500
+panic = "unwind"

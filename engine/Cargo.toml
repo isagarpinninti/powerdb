@@ -41,7 +41,7 @@ tokio-stream = "0.1.19"
 tokio-util = "0.7.20"
 toml = "1.1.8"
 tower = "0.5.3"
-tower-http = { version = "0.7.1", features = ["limit", "trace", "set-header", "compression-gzip", "cors"] }
+tower-http = { version = "0.7.1", features = ["limit", "trace", "set-header", "compression-gzip", "cors", "timeout", "catch-panic"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }

@@ -1,7 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the Manager window may do. The dashboard window shows a remote page and gets none of this.",
+  "description": "What the PowerDB window may do. The embedded dashboard is a page from the local server and is granted none of this.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "opener:allow-reveal-item-in-dir", "opener:allow-open-url"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/isagarpinninti/powerdb*" }, { "url": "http://127.0.0.1:*" }, { "url": "http://localhost:*" }]
+    }
+  ]
 }

@@ -41,6 +41,12 @@ pub struct Config {
     pub login_attempts_per_minute: u32,
     /// Where online backups are written; relative paths are relative to the data directory. Default: `<data>/backups`.
     pub backup_dir: Option<std::path::PathBuf>,
+    /// A request body that stalls this long between pieces is cut off (slow-body clients cannot hold connections for ever).
+    pub body_idle_timeout: std::time::Duration,
+    /// How long a JSON API request may take to be answered (uploads and the streaming of downloads are exempt).
+    pub request_timeout: std::time::Duration,
+    /// Send `Strict-Transport-Security`: set when the server itself terminates TLS.
+    pub hsts: bool,
     /// Sign in with Google, GitHub or another OAuth2 provider. Empty: not offered.
     pub oauth: oauth::OAuthConfig,
 }
@@ -55,6 +61,9 @@ impl Default for Config {
             cors_origins: vec![],
             login_attempts_per_minute: 10,
             backup_dir: None,
+            body_idle_timeout: std::time::Duration::from_secs(30),
+            request_timeout: std::time::Duration::from_secs(60),
+            hsts: false,
             oauth: Default::default(),
         }
     }
@@ -240,6 +249,24 @@ pub fn authorize(
     }
 }
 
+/// A handler that panics fails that one request, with a 500 that says nothing about why; the server and every other
+/// connection carry on. (The panic itself is logged with its message.)
+pub fn panic_response(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let what = err
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| err.downcast_ref::<&str>().copied())
+        .unwrap_or("(no message)");
+    tracing::error!("a request handler panicked: {what}");
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(
+            r#"{"error":{"code":"internal","message":"internal error"}}"#,
+        ))
+        .unwrap_or_default()
+}
+
 /// Nothing this server sends may be framed by another site, except the dashboard page for the desktop app. The dashboard
 /// is the one response that carries its own Content-Security-Policy (with a `frame-ancestors` list), so every other
 /// response gets `X-Frame-Options: DENY`.
@@ -296,7 +323,17 @@ pub fn router(state: AppState) -> Router {
             get(admin::list_backups).post(admin::backup),
         )
         // JSON bodies are small; uploads stream and enforce their own limits per field
-        .layer(DefaultBodyLimit::max(1 << 20));
+        .layer(DefaultBodyLimit::max(1 << 20))
+        // an answer must start within `request_timeout` (this does not limit how long a download streams)
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            state.cfg.request_timeout,
+        ))
+        // API answers hold accounts, tokens and records: nothing may keep a copy (downloads set their own caching)
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ));
     let upload_routes = Router::new()
         .route("/collections/{name}/records", post(records::create))
         .route(
@@ -318,7 +355,19 @@ pub fn router(state: AppState) -> Router {
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
         ))
-        .layer(axum::middleware::from_fn(frame_policy));
+        .layer(axum::middleware::from_fn(frame_policy))
+        .layer(tower_http::timeout::RequestBodyTimeoutLayer::new(
+            state.cfg.body_idle_timeout,
+        ))
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            panic_response as fn(_) -> _,
+        ));
+    if state.cfg.hsts {
+        app = app.layer(SetResponseHeaderLayer::if_not_present(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        ));
+    }
     if !state.cfg.cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = state
             .cfg
