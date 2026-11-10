@@ -1,6 +1,7 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-10)
+- macOS: the app is signed with a stable certificate, so its identity is the same in every build and the Keychain stops asking again after each update (choose **Always Allow** once). The certificate is self-signed: Gatekeeper still warns on first open.
 - New logo: a P built from a stem and a closed bowl, with an amber bar beneath it (the file that belongs to the record). Replaces the lightning bolt. Source files in docs/brand; app, dashboard and favicon updated.
 - One application: the dashboard is the app's **Data** section, not a separate window.
 - New app layout: grouped sidebar, command palette (Cmd/Ctrl+K), always-visible status bar, health overview, log levels.

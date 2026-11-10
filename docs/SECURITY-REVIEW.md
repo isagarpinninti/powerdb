@@ -30,7 +30,7 @@ libFuzzer targets in `fuzz/`). Platform-specific code is exercised in CI on Linu
 
 ## Known limits and open items
 - **No independent audit; no power-loss testing.** The crash tests kill the process, which cannot show what a disk does with unflushed writes.
-- **Not code-signed.** Installers and binaries are covered by checksums and GitHub build attestations, not by Apple or Microsoft signatures.
+- **Not signed by Apple or Microsoft.** The macOS app has a stable self-signed signature (so the Keychain grant survives updates), which Gatekeeper does not trust. Installers and binaries are covered by checksums and GitHub build attestations, not by Apple or Microsoft signatures.
 - **OAuth has not run against real Google or GitHub**, only against a mock that checks the protocol details.
 - **The storage library** (`fjall` / `lsm-tree`) has at least one parser that trusts stored lengths. One was found and guarded; others
   could exist in files the fuzzers did not mutate. Treat a data directory from an untrusted source as hostile.

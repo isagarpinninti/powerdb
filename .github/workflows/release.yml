@@ -63,8 +63,23 @@ jobs:
         working-directory: desktop
       - run: npm run sidecar
         working-directory: desktop
+      - name: Set up the macOS signing identity
+        if: runner.os == 'macOS'
+        env:
+          POWERDB_SIGNING_P12: ${{ secrets.POWERDB_SIGNING_P12 }}
+          POWERDB_SIGNING_P12_PASSWORD: ${{ secrets.POWERDB_SIGNING_P12_PASSWORD }}
+        run: scripts/macos-signing.sh
       - run: npx tauri build --bundles ${{ matrix.bundle }}
         working-directory: desktop
+      - name: Check the app's signing identity (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app=$(ls -d desktop/src-tauri/target/release/bundle/macos/PowerDB.app)
+          codesign --verify --deep --strict "$app"
+          codesign -d -r- "$app" 2>&1 | grep designated
+          if [ -n "${{ secrets.POWERDB_SIGNING_P12 }}" ]; then
+            codesign -d -r- "$app" 2>&1 | grep -q 'certificate root = H"' || { echo "expected a certificate-based identity"; exit 1; }
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: desktop-${{ matrix.os }}

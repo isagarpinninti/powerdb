@@ -31,7 +31,7 @@ It is not a replacement for PostgreSQL. There are no joins, no SQL, and no clust
 
 **Desktop app (macOS and Windows).** Download the `.dmg` or the setup `.exe` from the [latest release](https://github.com/isagarpinninti/powerdb/releases/latest). It runs a server on your computer and gives you a window to start and stop it, browse data, read logs and take backups.
 
-> The installers are **not code-signed** yet, so macOS and Windows will warn you the first time. [docs/INSTALL.md](docs/INSTALL.md) says how to get past the warning and how to check a download against its published checksum.
+> The installers are **not signed by Apple or Microsoft** yet, so macOS and Windows will warn you the first time. [docs/INSTALL.md](docs/INSTALL.md) says how to get past the warning and how to check a download against its published checksum.
 
 **Command line (macOS, Linux, Windows).**
 
@@ -108,7 +108,7 @@ Things it has **not** had, and that you should weigh before trusting it with dat
 - No independent security review. [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md) lists what the author checked and found, and what is open.
 - No test of power loss. The crash tests kill the process; they cannot show what a disk does with unflushed writes.
 - OAuth sign-in is tested against a stand-in provider, not yet against Google or GitHub themselves.
-- The installers are not code-signed.
+- The installers are not signed by Apple or Microsoft, so first launch shows a warning.
 - There is one on-disk format so far, so upgrades between formats have never run on real data.
 
 Report security problems privately, as described in [SECURITY.md](SECURITY.md).

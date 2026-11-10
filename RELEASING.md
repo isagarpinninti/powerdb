@@ -35,17 +35,24 @@ POWERDB_REPO=isagarpinninti/powerdb ./scripts/install.sh && powerdb --version
 Install the `.dmg` (and the Windows installer, if you have a Windows machine) and start it once. The `ci` workflow's `desktop`,
 `service` and `install-scripts` jobs do this on every push, but they use the build from that commit, not the published file.
 
-## Code signing (not set up yet)
+## Code signing
 
-The installers are currently unsigned: macOS shows "unidentified developer" and Windows SmartScreen warns. This needs certificates
+**macOS, stable identity (set up).** The desktop job signs the app with a self-signed certificate, "PowerDB Release Signing", so the
+app's designated requirement is `identifier "dev.powerdb.desktop" and certificate root = H"<hash>"` and does not change between
+builds. Ad-hoc signing used a per-build hash, which made the Keychain ask for the password after every update. The certificate lives
+in two repository secrets, `POWERDB_SIGNING_P12` (the `.p12`, base64) and `POWERDB_SIGNING_P12_PASSWORD`, and is imported by
+`scripts/macos-signing.sh`; without the secrets the build falls back to ad-hoc. The original files are kept in `~/.powerdb-signing/` on
+the maintainer's machine: **back them up**. A new certificate means a new identity, and every user is asked about the Keychain once more.
+This does not satisfy Gatekeeper: only a Developer ID plus notarization does.
+
+The installers are not signed by Apple or Microsoft: macOS shows "unidentified developer" and Windows SmartScreen warns. This needs certificates
 that cost money and belong to a person or company, so it cannot be done from the repository alone. When you have them:
 
 **macOS** (Apple Developer Program, about US$99 a year). Create a "Developer ID Application" certificate, export it as a `.p12`,
 and add these repository secrets: `APPLE_CERTIFICATE` (the `.p12`, base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`
 (for example `Developer ID Application: Your Name (TEAMID)`), and for notarization `APPLE_ID`, `APPLE_PASSWORD` (an app-specific
 password) and `APPLE_TEAM_ID`. Pass them as environment variables to the `npx tauri build` step of the `desktop` job in
-`release.yml`; Tauri then signs and notarizes. Remove `"signingIdentity": "-"` from `desktop/src-tauri/tauri.conf.json` at the
-same time (that value means "ad-hoc"). Check the result with `spctl -a -vv PowerDB.app` and `xcrun stapler validate`.
+`release.yml`; Tauri then signs and notarizes. Replace the self-signed identity in `scripts/macos-signing.sh` (and pass the notarization variables) at the same time. Check the result with `spctl -a -vv PowerDB.app` and `xcrun stapler validate`.
 
 **Windows.** Use an Authenticode certificate (or Azure Trusted Signing) and configure `bundle.windows.signCommand` or
 `certificateThumbprint` in `tauri.conf.json`. Check with `signtool verify /pa PowerDB_X.Y.Z_x64-setup.exe`.

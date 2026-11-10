@@ -18,7 +18,7 @@ kept in your system's credential store (macOS Keychain, Windows Credential Manag
 Closing the window leaves the server running in the menu bar or system tray; **Quit** stops it cleanly first. If the app ever crashes, the
 server notices and shuts itself down, so a database is never left running unattended.
 
-> **These installers are not code-signed.** Signing needs a paid Apple Developer ID (plus notarization) and a Windows code-signing
+> **These installers are not signed by Apple or Microsoft.** (The macOS app carries a stable self-signed signature, so the Keychain asks once and remembers: choose **Always Allow**.) Signing needs a paid Apple Developer ID (plus notarization) and a Windows code-signing
 > certificate, which this project does not have yet. Expect a warning the first time:
 > on macOS, right-click the app and choose **Open** (or allow it under System Settings, Privacy & Security); on Windows, SmartScreen says
 > "Windows protected your PC": choose **More info**, then **Run anyway**. You can check a download is the file this project built:
