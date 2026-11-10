@@ -1,37 +1,40 @@
-"""Draws the PowerDB app icon (the dashboard's mark: framed dark tile, a bolt, one amber dot) at 1024x1024.
+"""Draws the PowerDB logo (docs/brand/logo-mark.svg) as PNG files: a P made of a stem and a closed bowl, with an amber bar beneath
+it (the file that belongs to the record), on a dark rounded tile.
 
-Usage: python3 make-icon.py app-icon.png      then: npx tauri icon app-icon.png
-Drawn at 4x and scaled down so the edges are smooth.
+    python3 desktop/scripts/make-icon.py app-icon.png [margin]     then: npx tauri icon app-icon.png
+
+`margin` is the transparent border as a fraction of the image (macOS app icons want about 0.098). With no margin the tile fills the
+image, which is what the docs/brand PNGs use. Drawn at 4x and scaled down so the edges are smooth.
 """
 import sys
 from PIL import Image, ImageDraw
 
 S = 4096
-img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-d = ImageDraw.Draw(img)
+BG, INK, ACCENT = (10, 10, 11, 255), (250, 250, 250, 255), (245, 158, 11, 255)
 
-pad = int(S * 0.098)            # the margin macOS expects around an app icon
-size = S - 2 * pad
-u = size / 32.0                  # one unit of the 32x32 mark
-ox = oy = pad
 
-def P(x, y):
-    return (ox + x * u, oy + y * u)
+def tile(margin=0.0):
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    pad = int(S * margin)
+    u = (S - 2 * pad) / 32.0
+    P = lambda x, y: (pad + x * u, pad + y * u)
+    box = lambda x0, y0, x1, y1: [P(x0, y0), P(x1, y1)]
+    pill = lambda x, y, w, h, r, c: d.rounded_rectangle(box(x, y, x + w, y + h), radius=r * u, fill=c)
 
-# tile
-d.rounded_rectangle([P(1.5, 1.5), P(30.5, 30.5)], radius=8 * u, fill=(10, 10, 11, 255))
-d.rounded_rectangle([P(1.5, 1.5), P(30.5, 30.5)], radius=8 * u, outline=(250, 250, 250, 90), width=int(1.5 * u))
+    pill(0, 0, 32, 32, 7.5, BG)
+    d.rounded_rectangle(box(0.5, 0.5, 31.5, 31.5), radius=7 * u, outline=(255, 255, 255, 36), width=max(2, int(u)))
+    pill(8, 6, 4.5, 20, 2.25, INK)                      # the stem
+    d.rectangle(box(10.25, 6, 17.5, 20), fill=INK)      # the bowl: a block...
+    d.ellipse(box(10.5, 6, 24.5, 20), fill=INK)         # ...with a half-circle on the right
+    d.rectangle(box(13.5, 10.5, 17.5, 15.5), fill=BG)   # the counter (the hole in the P): a block,
+    d.ellipse(box(15, 10.5, 20, 15.5), fill=BG)         # a half-circle on the right,
+    pill(12.5, 10.5, 2, 5, 1, BG)                       # and a small radius on the left, like every other corner
+    pill(14.5, 22.5, 10, 3.5, 1.75, ACCENT)             # the file
+    return img
 
-# bolt: M18.5 6.5 10 17.5h5.6L13.8 25.5 22 14.2h-5.4z
-bolt = [P(18.5, 6.5), P(10, 17.5), P(15.6, 17.5), P(13.8, 25.5), P(22, 14.2), P(16.6, 14.2)]
-w = int(1.8 * u)
-d.line(bolt + [bolt[0]], fill=(250, 250, 250, 255), width=w, joint="curve")
-for x, y in bolt:                # round the joins
-    d.ellipse([x - w / 2, y - w / 2, x + w / 2, y + w / 2], fill=(250, 250, 250, 255))
 
-# amber accent
-cx, cy = P(23.5, 8.5)
-r = 2.2 * u
-d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(245, 158, 11, 255))
-
-img.resize((1024, 1024), Image.LANCZOS).save(sys.argv[1] if len(sys.argv) > 1 else "app-icon.png")
+if __name__ == "__main__":
+    out = sys.argv[1] if len(sys.argv) > 1 else "app-icon.png"
+    margin = float(sys.argv[2]) if len(sys.argv) > 2 else 0.098
+    tile(margin).resize((1024, 1024), Image.LANCZOS).save(out)

@@ -1,3 +1,5 @@
+<img src="docs/brand/logo-mark.svg" width="72" height="72" alt="">
+
 # PowerDB
 
 PowerDB is a database for records and the files that belong to them. It saves a record and its files in one step, so you do not end up with a record pointing at a file that never arrived, or a file that belongs to nothing.

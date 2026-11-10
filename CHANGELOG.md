@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- New logo: a P built from a stem and a closed bowl, with an amber bar beneath it (the file that belongs to the record). Replaces the lightning bolt. Source files in docs/brand; app, dashboard and favicon updated.
 - One application: the dashboard is the app's **Data** section, not a separate window.
 - New app layout: grouped sidebar, command palette (Cmd/Ctrl+K), always-visible status bar, health overview, log levels.
 - Security: a panicking request handler no longer takes the whole server down (the release profile unwinds, one request gets a 500);
