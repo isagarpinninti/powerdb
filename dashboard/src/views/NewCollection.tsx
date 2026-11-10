@@ -29,7 +29,7 @@ export function NewCollection({ onCreated }: { onCreated: (name: string) => void
   };
 
   return (
-    <form onSubmit={create} className="mx-auto max-w-3xl space-y-6 p-8">
+    <form onSubmit={create} className="space-y-6 p-8">
       <div>
         <h1 className="text-2xl font-bold">New collection</h1>
         <p className="text-sm text-muted">New collections are locked: only administrators can use them until you set access rules.</p>

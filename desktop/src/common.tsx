@@ -11,7 +11,7 @@ export function Dot({ phase, size = 10 }: { phase: Phase; size?: number }) {
 
 export function Page({ title, subtitle, actions, children }: { title: string; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode }) {
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 px-8 py-7">
+    <div className="w-full space-y-6 px-8 py-7">
       <div className="flex items-start justify-between gap-4">
         <div><h1 className="text-[22px] font-bold tracking-tight">{title}</h1>{subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}</div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

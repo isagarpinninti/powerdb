@@ -113,7 +113,7 @@ export function App() {
 
 function Home({ collections, go }: { collections: CollectionDef[] | null; go: (n: Nav) => void }) {
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-10">
+    <div className="space-y-6 p-10">
       <h1 className="text-2xl font-bold">Collections</h1>
       <p className="text-muted">
         Records and the files that belong to them live in one database, and a record appears together with its files or not at all. Collections are <b>locked</b> until you give them rules: until then only administrators can read or write them.

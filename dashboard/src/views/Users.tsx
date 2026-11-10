@@ -17,7 +17,7 @@ export function Users() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4 p-8">
+    <div className="space-y-4 p-8">
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-bold">Users</h1><p className="text-sm text-muted">Accounts that can sign in. Registration is closed unless the server was started with --open-registration.</p></div>
         <Button variant="primary" onClick={() => setAdding(true)}>Add user</Button>

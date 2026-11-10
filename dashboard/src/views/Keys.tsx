@@ -18,7 +18,7 @@ export function Keys({ collections }: { collections: CollectionDef[] }) {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4 p-8">
+    <div className="space-y-4 p-8">
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-bold">API keys</h1><p className="text-sm text-muted">For servers and scripts. A key can be limited to reading or writing and to chosen collections. Only a hash is stored.</p></div>
         <Button variant="primary" onClick={() => setAdding(true)}>Create key</Button>

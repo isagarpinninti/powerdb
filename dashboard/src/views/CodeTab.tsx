@@ -77,7 +77,7 @@ curl -X PATCH '${url}/api/v1/collections/${n}/records/RECORD_ID' \\
 curl -X DELETE '${url}/api/v1/collections/${n}/records/RECORD_ID' -H 'Authorization: Bearer $POWERDB_KEY'`;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 p-6">
+    <div className="space-y-5 p-6">
       <p className="text-sm text-muted">Generated from this collection's schema. Whether a call succeeds depends on the access rules and on the key or session you send.</p>
       <Snippet title="TypeScript / JavaScript (powerdb-sdk)" code={ts} />
       <Snippet title="HTTP (curl): works from any language" code={rest} />

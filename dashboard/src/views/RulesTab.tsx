@@ -72,7 +72,7 @@ export function RulesTab({ def, onSaved }: { def: CollectionDef; onSaved: (d: Co
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-6">
+    <div className="space-y-5 p-6">
       <div>
         <h2 className="text-lg font-semibold">Who can do what</h2>
         <p className="text-sm text-muted">Each action has a rule. With no rule, only administrators can do it. Rules are checked on the server before anything is read or written; administrators and administrator keys always pass.</p>

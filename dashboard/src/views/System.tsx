@@ -38,7 +38,7 @@ export function System() {
   );
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 p-8">
+    <div className="space-y-5 p-8">
       <div><h1 className="text-2xl font-bold">System</h1><p className="text-sm text-muted">The file store behind your collections.</p></div>
       <ErrorBox error={error} />
       {!s ? <Spinner /> : (

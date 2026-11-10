@@ -37,7 +37,7 @@ export function SchemaTab({ def, onSaved, onDropped }: { def: CollectionDef; onS
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    <div className="space-y-6 p-6">
       <div>
         <h2 className="text-lg font-semibold">Fields</h2>
         <p className="mb-4 text-sm text-muted">Records are checked against these when they are created or changed. Removing a field hides it from new writes; data already stored under it stays on disk.</p>
