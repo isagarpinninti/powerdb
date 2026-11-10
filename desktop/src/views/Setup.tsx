@@ -65,12 +65,15 @@ export function Setup() {
         <div className="mx-auto max-w-xl space-y-6">
           {step === 0 && (
             <>
-              <div><h2 className="text-3xl font-bold tracking-tight">Welcome</h2><p className="mt-2 text-muted">PowerDB sets up and runs a database server on this computer. A record and its files are stored together and become visible together, or not at all.</p></div>
-              <Card className="divide-y divide-line text-sm">
-                {[['Runs locally', 'The server listens on this computer only. Nothing leaves it.'], ['One folder', 'All data lives in a single folder you choose, easy to back up.'], ['Nothing to configure', 'Start, stop, back up and restore from this window or the tray icon.']].map(([t, d]) => (
-                  <div key={t} className="px-5 py-3.5"><div className="font-medium">{t}</div><div className="text-muted">{d}</div></div>))}
-              </Card>
-              <Button variant="primary" onClick={() => setStep(1)}>Get started</Button>
+              <div>
+                <h2 className="text-3xl font-bold tracking-tight">Set up PowerDB</h2>
+                <p className="mt-3 text-muted">PowerDB stores records and the files attached to them together. A record and its files are saved in one step, so you never end up with one and not the other.</p>
+              </div>
+              <div className="space-y-3 text-sm text-muted">
+                <p>This sets up a server that runs on this computer. Other computers cannot reach it unless you change that later.</p>
+                <p>Everything is kept in one folder that you pick next. Copying that folder while the server is stopped is a valid backup.</p>
+              </div>
+              <Button variant="primary" onClick={() => setStep(1)}>Continue</Button>
             </>
           )}
 

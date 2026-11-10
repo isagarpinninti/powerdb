@@ -11,9 +11,9 @@ export function Dot({ phase, size = 10 }: { phase: Phase; size?: number }) {
 
 export function Page({ title, subtitle, actions, children }: { title: string; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode }) {
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-5 p-8">
+    <div className="mx-auto w-full max-w-5xl space-y-6 px-8 py-7">
       <div className="flex items-start justify-between gap-4">
-        <div><h1 className="text-2xl font-bold tracking-tight">{title}</h1>{subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}</div>
+        <div><h1 className="text-[22px] font-bold tracking-tight">{title}</h1>{subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}</div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
       {children}
@@ -60,4 +60,24 @@ export function uptime(since: number | null): string {
   const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m` : `${s}s`;
+}
+
+/** "4 minutes ago", "3 days ago": how long since a moment, in words. */
+export function timeAgo(ms: number, now = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - ms) / 1000));
+  if (s < 45) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}
+
+/** The level word in a log line the server wrote ("INFO", "WARN", "ERROR"), for colouring and filtering. */
+export function logLevel(line: string): 'error' | 'warn' | 'info' | 'debug' {
+  if (/\bERROR\b/.test(line)) return 'error';
+  if (/\bWARN\b/.test(line)) return 'warn';
+  if (/\b(DEBUG|TRACE)\b/.test(line)) return 'debug';
+  return 'info';
 }

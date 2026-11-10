@@ -62,7 +62,7 @@ export function App() {
             {collections?.map((c) => (
               <button key={c.name} className={item(nav.page === 'collection' && nav.name === c.name)} onClick={() => setNav({ page: 'collection', name: c.name })}>
                 <span className="truncate">{c.name}</span>
-                {c.encrypt && <span title="Files encrypted at rest" aria-label="encrypted">🔒</span>}
+                {c.encrypt && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-faint" role="img" aria-label="Files encrypted at rest"><title>Files encrypted at rest</title><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 018 0v3" /></svg>}
               </button>
             ))}
           </div>
