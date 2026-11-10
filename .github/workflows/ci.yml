@@ -206,12 +206,17 @@ jobs:
       - name: Check the app's signing identity (macOS)
         if: runner.os == 'macOS'
         run: |
-          app=$(ls -d desktop/src-tauri/target/release/bundle/macos/PowerDB.app)
+          mnt="$RUNNER_TEMP/sigcheck"
+          hdiutil attach desktop/src-tauri/target/release/bundle/dmg/*.dmg -nobrowse -readonly -mountpoint "$mnt" >/dev/null
+          app="$mnt/PowerDB.app"
           codesign --verify --deep --strict "$app"
           codesign -d -r- "$app" 2>&1 | grep designated
+          ok=1
           if [ -n "${{ secrets.POWERDB_SIGNING_P12 }}" ]; then
-            codesign -d -r- "$app" 2>&1 | grep -q 'certificate root = H"' || { echo "expected a certificate-based identity"; exit 1; }
+            codesign -d -r- "$app" 2>&1 | grep -q 'certificate root = H"' || ok=0
           fi
+          hdiutil detach "$mnt" >/dev/null
+          [ "$ok" = 1 ] || { echo "expected a certificate-based identity"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: installer-${{ matrix.os }}
