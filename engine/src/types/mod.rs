@@ -7,6 +7,7 @@
 pub mod decimal;
 pub mod key;
 pub mod row;
+pub mod schema;
 
 pub use decimal::Decimal;
 

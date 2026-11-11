@@ -2,6 +2,7 @@
 
 ## Unreleased
 - Groundwork for typed tables: a type system with row and index-key codecs (`engine/src/types`), not yet used by storage. See docs/TYPES_AND_TABLES.md.
+- Table catalog logic (`engine/src/types/schema.rs`): columns with stable ids, schema versions, add, drop, rename and widen without rewriting rows, and reading a row written under an older schema. Library only; not yet used by storage.
 - JSON numbers with many digits now parse exactly (`serde_json`'s `float_roundtrip`). Before, a float with 17 significant digits could come back one bit different after being read.
 - Two new fuzz targets, `row` and `key`.
 

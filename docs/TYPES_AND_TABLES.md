@@ -1,6 +1,8 @@
 # Design: types, tables, constraints and indexes (Phase 2)
 
-> **Status: slice 2a is built** (`engine/src/types/`): the type system, the row codec and the key codec, as a library that changes nothing on disk.
+> **Status: slices 2a and 2b are built.** 2b is `engine/src/types/schema.rs` (tables, columns with stable ids, schema versions, the changes of decision 4 and reading an old row under a new schema) with 11 tests, including a model test of random schema changes against rows that were written under older schemas and never rewritten. Its first version of the "dropped column ids are never reused" test missed the case the model found (dropping the column with the highest id); both now cover it. Persisting the catalog comes with slice 2c, because it shares the layout change.
+>
+> **Slice 2a is built** (`engine/src/types/`): the type system, the row codec and the key codec, as a library that changes nothing on disk.
 > It has 16 tests (seeded random round trips for every type, order of keys against an independent oracle, 15 malformed-row cases, mutation fuzzing
 > of both decoders under an allocation guard) and two libFuzzer targets (`row`, `key`; compiled, run by the weekly fuzz workflow, not run locally).
 > Each check was shown to fail when the thing it guards is broken. Slices 2b to 2g are not started.
