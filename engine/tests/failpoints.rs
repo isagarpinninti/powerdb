@@ -102,6 +102,13 @@ fn workload_child() {
     };
     let db = Db::open(&dir, options()).unwrap();
     db.create_collection(schema()).unwrap();
+    db.create_bucket(powerdb::storage::objects::BucketDef {
+        name: "b".into(),
+        versioning: false,
+        encrypt: false,
+        created_at: 0,
+    })
+    .unwrap();
     let mut out = std::io::stdout();
     let mut say = |line: String| {
         writeln!(out, "{line}").unwrap();
@@ -135,6 +142,26 @@ fn workload_child() {
             .unwrap();
             say(format!("ACK update {id} {} {}", nc.0, nc.1));
         }
+        // an object: the key is reused, so puts replace and deletes release
+        let key = format!("k{}", i % 6);
+        let oc: Content = ((i + 2) % 13, i % 3);
+        say(format!("TRY put {key} {} {}", oc.0, oc.1));
+        let f = db
+            .stage_object(
+                "b",
+                "application/octet-stream",
+                None,
+                Cursor::new(bytes_of(oc)),
+            )
+            .unwrap();
+        db.put_object("b", &key, f, Default::default()).unwrap();
+        say(format!("ACK put {key} {} {}", oc.0, oc.1));
+        if i % 4 == 1 {
+            let dk = format!("k{}", (i + 3) % 6);
+            say(format!("TRY delobj {dk}"));
+            db.delete_object("b", &dk, None).unwrap();
+            say(format!("ACK delobj {dk}"));
+        }
         if i % 5 == 4 {
             db.gc_step(10).unwrap();
         }
@@ -149,6 +176,8 @@ struct Acked {
     /// the contents a live record's file may legitimately hold (an update in flight adds a second possibility)
     live: HashMap<String, Vec<Content>>,
     maybe_deleted: HashSet<String>,
+    /// objects: the contents a key may hold, and whether it may be absent
+    objects: HashMap<String, (Vec<Content>, bool)>,
 }
 
 fn parse(lines: &[String]) -> Acked {
@@ -181,6 +210,24 @@ fn parse(lines: &[String]) -> Acked {
                     a.live.insert(id.to_string(), vec![c]);
                 }
             }
+            ["TRY", "put", key, ..] => {
+                if let Some(c) = c(3) {
+                    a.objects.entry(key.to_string()).or_default().0.push(c);
+                }
+            }
+            ["ACK", "put", key, ..] => {
+                if let Some(c) = c(3) {
+                    a.objects.insert(key.to_string(), (vec![c], false));
+                }
+            }
+            ["TRY", "delobj", key] => {
+                if let Some(e) = a.objects.get_mut(*key) {
+                    e.1 = true;
+                }
+            }
+            ["ACK", "delobj", key] => {
+                a.objects.remove(*key);
+            }
             _ => {} // a line cut off by the crash
         }
     }
@@ -201,6 +248,24 @@ fn check_acked(db: &Db, a: &Acked, ctx: &str) {
                 assert!(
                     allowed.iter().any(|c| got == bytes_of(*c)),
                     "{ctx}: the file of {id} is not any of the contents it may hold"
+                );
+            }
+        }
+    }
+}
+
+fn check_objects(db: &Db, a: &Acked, ctx: &str) {
+    for (key, (allowed, may_be_absent)) in &a.objects {
+        match db.get_object("b", key, None) {
+            Err(powerdb::Error::NotFound(_)) => {
+                assert!(*may_be_absent, "{ctx}: acknowledged object {key} is gone");
+            }
+            Err(e) => panic!("{ctx}: object {key}: {e}"),
+            Ok(m) => {
+                let got = db.read_file(&from_hex_32(&m.file_id).unwrap()).unwrap();
+                assert!(
+                    allowed.iter().any(|c| got == bytes_of(*c)),
+                    "{ctx}: object {key} holds bytes that are none of the contents it may hold"
                 );
             }
         }
@@ -246,6 +311,7 @@ fn crash_at(point: &str, nth: u64) {
     );
     // 2. nothing acknowledged was lost
     check_acked(&db, &acked, &ctx);
+    check_objects(&db, &acked, &ctx);
     // 3. it still works, and stays consistent through collection and compaction
     let rec = db
         .create("docs", fields(999), vec![("a".into(), stage(&db, (9, 2)))])
@@ -259,6 +325,7 @@ fn crash_at(point: &str, nth: u64) {
         r.problems
     );
     check_acked(&db, &acked, &format!("{ctx} (after collection)"));
+    check_objects(&db, &acked, &format!("{ctx} (after collection)"));
     let got = db
         .read_file(&from_hex_32(&db.get("docs", &rec.id).unwrap().unwrap().files["a"].id).unwrap())
         .unwrap();

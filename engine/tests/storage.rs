@@ -709,7 +709,7 @@ fn a_directory_from_a_newer_format_is_refused_untouched() {
     drop(Db::open(&d.0, small_opts()).unwrap());
     assert_eq!(
         std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
-        "1"
+        powerdb::storage::FORMAT_VERSION.to_string()
     );
     std::fs::write(d.0.join("FORMAT"), "999\n").unwrap();
     let err = Db::open(&d.0, small_opts()).err().expect("must refuse");
@@ -721,15 +721,70 @@ fn a_directory_from_a_newer_format_is_refused_untouched() {
 }
 
 #[test]
-fn a_directory_without_a_format_marker_is_adopted_as_format_1() {
+fn a_directory_without_a_format_marker_is_adopted_as_format_1_and_upgraded() {
     let d = Dir::new();
     drop(Db::open(&d.0, small_opts()).unwrap());
     std::fs::remove_file(d.0.join("FORMAT")).unwrap();
     drop(Db::open(&d.0, small_opts()).unwrap());
     assert_eq!(
         std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
-        "1"
+        powerdb::storage::FORMAT_VERSION.to_string()
     );
+    assert!(
+        d.0.join("pre-migration-v1").exists(),
+        "the metadata was copied aside before the upgrade"
+    );
+}
+
+/// A layout-1 directory with real data (written before objects existed) opens, is upgraded in place, keeps every record and file, passes the
+/// integrity check, and can then hold objects. Layout 2 only adds empty keyspaces, so a directory written now and marked layout 1 is the same on disk.
+#[test]
+fn a_layout_1_directory_with_data_upgrades_to_layout_2() {
+    let d = Dir::new();
+    let (id, bytes) = {
+        let db = open(&d);
+        let bytes = data(300_000, 5);
+        let rec = db
+            .create(
+                "invoices",
+                fields("acme", 10),
+                vec![("document".into(), stage(&db, &bytes))],
+            )
+            .unwrap();
+        (rec.id, bytes)
+    };
+    std::fs::write(d.0.join("FORMAT"), "1\n").unwrap();
+    let db = open(&d);
+    assert_eq!(
+        std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
+        "2"
+    );
+    assert!(d.0.join("pre-migration-v1").join("meta").exists());
+    let rec = db.get("invoices", &id).unwrap().unwrap();
+    assert_eq!(read(&db, &rec, "document"), bytes);
+    let r = db.verify(true).unwrap();
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+    // and the new feature works on the upgraded directory
+    db.create_bucket(powerdb::storage::objects::BucketDef {
+        name: "files".into(),
+        versioning: false,
+        encrypt: false,
+        created_at: 0,
+    })
+    .unwrap();
+    let pending = db
+        .stage_object(
+            "files",
+            "text/plain",
+            Some("a.txt"),
+            std::io::Cursor::new(b"hello".to_vec()),
+        )
+        .unwrap();
+    db.put_object("files", "a.txt", pending, Default::default())
+        .unwrap();
+    let r = db.verify(true).unwrap();
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+    assert_eq!(r.objects, 1);
 }
 
 #[test]

@@ -5,6 +5,7 @@ pub mod chunker;
 pub mod format;
 pub mod gc;
 pub mod model;
+pub mod objects;
 pub mod segment;
 pub mod snapshot;
 pub mod verify;
@@ -89,6 +90,10 @@ pub(crate) struct Spaces {
     pub chunk_refs: Keyspace,
     pub gc_queue: Keyspace,
     pub seg_dead: Keyspace,
+    /// Named containers for standalone objects (layout 2).
+    pub buckets: Keyspace,
+    /// Object versions, keyed `bucket 0x00 key 0x00 version id` (layout 2).
+    pub objects: Keyspace,
 }
 
 pub(crate) struct Inner {
@@ -160,6 +165,8 @@ pub(crate) fn u64_of(v: Option<fjall::Slice>) -> u64 {
 pub struct PendingFile {
     pub manifest: Manifest,
     pub file_id: [u8; 32],
+    /// BLAKE3 of the file's bytes (the file id is the hash of the manifest, which names the chunks, not the content).
+    pub content_hash: [u8; 32],
     pub mime: String,
     pub name: Option<String>,
     pub(crate) new_ptrs: HashMap<[u8; 32], ChunkPtr>,
@@ -279,7 +286,7 @@ fn check_meta_files(meta: &Path) -> Result<()> {
 }
 
 /// Version of the on-disk layout. Bump it, and add an entry to `format::MIGRATIONS`, whenever a change would make older data unreadable.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
@@ -325,6 +332,8 @@ impl Db {
             chunk_refs: store.keyspace("chunk_refs", o)?,
             gc_queue: store.keyspace("gc_queue", o)?,
             seg_dead: store.keyspace("seg_dead", o)?,
+            buckets: store.keyspace("buckets", o)?,
+            objects: store.keyspace("objects", o)?,
         };
         let log = SegmentLog::open(&path.join("blobs"), opts.segment_bytes)?;
         let next_seq = match ks.gc_queue.last_key_value() {
@@ -498,7 +507,18 @@ impl Db {
         reader: impl Read,
     ) -> Result<PendingFile> {
         let def = self.collection(collection)?;
-        let codec = if def.encrypt {
+        self.stage_with(def.encrypt, mime, name, reader)
+    }
+
+    /// Chunks, hashes and appends `reader` to the log; `encrypt` picks the codec. What a collection or a bucket stages through.
+    pub(crate) fn stage_with(
+        &self,
+        encrypt: bool,
+        mime: &str,
+        name: Option<&str>,
+        reader: impl Read,
+    ) -> Result<PendingFile> {
+        let codec = if encrypt {
             self.codec_by_flags(1)?
         } else {
             self.codec_by_flags(0)?
@@ -512,8 +532,10 @@ impl Db {
         let mut chunks: Vec<([u8; 32], u32)> = Vec::new();
         let mut new_ptrs: HashMap<[u8; 32], ChunkPtr> = HashMap::new();
         let mut size = 0u64;
+        let mut content = blake3::Hasher::new();
         for ch in Chunker::new(reader, self.inner.opts.chunk) {
             let data = ch?;
+            content.update(&data);
             let hash = *blake3::hash(&data).as_bytes();
             let key = chunk_key(flags, &hash);
             size += data.len() as u64;
@@ -540,6 +562,7 @@ impl Db {
         Ok(PendingFile {
             manifest,
             file_id,
+            content_hash: *content.finalize().as_bytes(),
             mime: mime.to_string(),
             name: name.map(str::to_string),
             new_ptrs,
@@ -733,7 +756,30 @@ impl Db {
                 *file_delta.entry(id_of(f)?).or_default() += 1;
             }
         }
+        self.apply_file_deltas(&mut batch, &file_delta, pend)?;
 
+        match (old, new) {
+            (_, Some(n)) => batch.insert(
+                &ks.records,
+                rec_key(&n.collection, &n.id),
+                serde_json::to_vec(n)?,
+            ),
+            (Some(o), None) => batch.remove(&ks.records, rec_key(&o.collection, &o.id)),
+            (None, None) => {}
+        }
+        self.finish_batch(batch)
+    }
+
+    /// Adds to `batch` everything a change in file references implies: the new manifests and chunk index entries, the file and chunk counters, the
+    /// release queue and the dead-byte accounting. `file_delta` is how many more (or fewer) things refer to each file after this change; both
+    /// records and objects count, so both come through here. Caller holds the commit lock.
+    fn apply_file_deltas(
+        &self,
+        batch: &mut fjall::OwnedWriteBatch,
+        file_delta: &HashMap<[u8; 32], i64>,
+        pend: &[&PendingFile],
+    ) -> Result<()> {
+        let ks = &self.inner.ks;
         let mut chunk_delta: HashMap<[u8; 32], i64> = HashMap::new();
         let mut new_ptrs: HashMap<[u8; 32], ChunkPtr> = HashMap::new();
         for p in pend {
@@ -741,7 +787,7 @@ impl Db {
                 new_ptrs.entry(*k).or_insert(*v);
             }
         }
-        for (fid, d) in &file_delta {
+        for (fid, d) in file_delta {
             if *d == 0 {
                 continue;
             }
@@ -807,15 +853,11 @@ impl Db {
             );
         }
 
-        match (old, new) {
-            (_, Some(n)) => batch.insert(
-                &ks.records,
-                rec_key(&n.collection, &n.id),
-                serde_json::to_vec(n)?,
-            ),
-            (Some(o), None) => batch.remove(&ks.records, rec_key(&o.collection, &o.id)),
-            (None, None) => {}
-        }
+        Ok(())
+    }
+
+    /// Commits a batch built under the commit lock: the failure points, the write, and the fsync.
+    pub(crate) fn finish_batch(&self, batch: fjall::OwnedWriteBatch) -> Result<()> {
         crate::failpoint!("commit.before_batch");
         batch.commit()?;
         crate::failpoint!("commit.after_batch");

@@ -8,8 +8,8 @@
 //! * `FORMAT` is rewritten atomically after each step, so an interrupted upgrade resumes from the last completed step;
 //! * a failure stops at that step and says where the safety copy is. The directory stays at the last good version.
 //!
-//! There is only layout 1 so far, so `MIGRATIONS` is empty. The first change that makes old data unreadable adds an entry
-//! here and bumps `FORMAT_VERSION`; the machinery below is already exercised by tests with injected steps.
+//! Layout 1 is 0.1 to 0.3.1. Layout 2 (buckets and objects) is the first real step; see `v1_to_v2`. A change that makes old data unreadable
+//! adds an entry here and bumps `FORMAT_VERSION`; the machinery below is exercised by tests with injected steps and by `tools/upgrade-test.py`.
 
 use crate::error::{Error, Result};
 use std::path::Path;
@@ -21,7 +21,18 @@ pub struct Migration {
     pub run: fn(&Path) -> Result<()>,
 }
 
-pub const MIGRATIONS: &[Migration] = &[];
+/// Layout 2 adds the `buckets` and `objects` keyspaces. They are created empty when the database opens, so there is nothing to rewrite: the step
+/// exists so that a layout-1 directory is copied aside and then marked layout 2, and so an older binary, which would not count objects as references
+/// to files, refuses the directory instead of mis-reading it.
+fn v1_to_v2(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+pub const MIGRATIONS: &[Migration] = &[Migration {
+    from: 1,
+    describe: "adds buckets and objects (new, empty keyspaces)",
+    run: v1_to_v2,
+}];
 
 fn write_version(path: &Path, v: u32) -> Result<()> {
     let tmp = path.join("FORMAT.tmp");

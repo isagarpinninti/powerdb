@@ -8,6 +8,7 @@
 use super::{
     Db,
     model::{Manifest, Record},
+    objects::ObjectMeta,
     segment::ChunkPtr,
     u64_of,
 };
@@ -18,6 +19,7 @@ use std::collections::HashMap;
 #[derive(Debug, Default, Clone)]
 pub struct VerifyReport {
     pub records: u64,
+    pub objects: u64,
     pub files: u64,
     pub chunks: u64,
     pub chunk_bytes_checked: u64,
@@ -65,6 +67,35 @@ impl Db {
                         format!("record {} field {field}: bad file id", rec.id),
                     ),
                 }
+            }
+        }
+
+        // the objects: each version names a file and counts as one use of it, exactly as a record's file field does
+        for g in ks.objects.iter() {
+            let (_, v) = g.into_inner()?;
+            let m: ObjectMeta = serde_json::from_slice(&v)
+                .map_err(|e| Error::Corrupt(format!("an object does not decode: {e}")))?;
+            r.objects += 1;
+            let what = format!("object {}/{} (version {})", m.bucket, m.key, m.version_id);
+            if !ks.buckets.contains_key(m.bucket.as_bytes())? {
+                note(&mut r, format!("{what}: its bucket does not exist"));
+            }
+            if m.delete_marker {
+                continue;
+            }
+            match from_hex_32(&m.file_id) {
+                Some(id) => {
+                    *file_uses.entry(id).or_default() += 1;
+                    match ks.files.get(id)? {
+                        None => note(&mut r, format!("{what}: its file {} is missing", m.file_id)),
+                        Some(mv) => {
+                            if Manifest::from_bytes(&mv).is_some_and(|mf| mf.size != m.size) {
+                                note(&mut r, format!("{what}: its size differs from its file's"));
+                            }
+                        }
+                    }
+                }
+                None => note(&mut r, format!("{what}: bad file id")),
             }
         }
 
