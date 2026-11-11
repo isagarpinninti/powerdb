@@ -31,6 +31,10 @@ impl Db {
         let mut stats = GcStats::default();
         let mut chunk_refs: HashMap<[u8; 32], u64> = HashMap::new();
         let mut dead: HashMap<u32, u64> = HashMap::new();
+        // A file can be queued more than once (deleted, re-attached before this ran, deleted again). The batch is not committed until the end of
+        // the pass, so the store still shows the file after its first release here: without this set the second entry would release it again
+        // and count every chunk it shares with a live file down twice, which ends in compaction deleting data that is in use.
+        let mut released: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
         for (taken, g) in ks.gc_queue.iter().enumerate() {
             if taken >= max_files {
                 break;
@@ -43,6 +47,9 @@ impl Db {
                 .map_err(|_| Error::Corrupt("gc queue entry".into()))?;
             if u64_of(ks.file_refs.get(fid)?) > 0 {
                 continue; // a new record took the same file before we got here
+            }
+            if !released.insert(fid) {
+                continue; // already released earlier in this pass
             }
             let Some(mv) = ks.files.get(fid)? else {
                 batch.remove(&ks.file_refs, fid.to_vec());

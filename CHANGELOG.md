@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- **Fixed a data-loss bug in file garbage collection** (present in every release up to 0.3.1). If a file was deleted, attached again before the background collector ran (it runs every few seconds), and deleted again, the collector released it twice in one pass. Chunks it shared with another file that was still in use were counted down twice; once compaction ran, those chunks could be deleted and the other file became unreadable (`powerdb check` reports it as a count mismatch or a missing chunk). It needs the same file content (identical bytes) to be re-used within that window, so it is uncommon, but it is real. Upgrading fixes it for future operations; it cannot repair a database where it already happened, though `powerdb check` will show whether that happened.
+- New model-based test: random creates, updates, deletes, collection, compaction and restarts against an in-memory model, checking the stored data and the reference counts after each step. It found the bug above.
+
 ## 0.3.1 (2026-11-11)
 - New look: layered near-black surfaces with hairline borders, a light theme to match, and tighter type. Amber stays the one accent.
 - Pages use the full width of the window instead of a centred column (app and dashboard).
