@@ -10,7 +10,7 @@ One call that creates, updates or deletes **one record**, with any files attache
 2. **Commit.** Under one short mutex (`commit`), one fjall write batch applies the manifest, new chunk pointers, reference-count changes and the record. The batch is atomic across keyspaces.
 3. **Acknowledge.** In `commit` mode the journal is fsynced before the call returns.
 
-There is no way to group two calls into one atomic unit. There is no `BEGIN`, `COMMIT` or `ROLLBACK`.
+Putting or deleting one object (a key's new version, or a replaced version's release) is the same kind of unit: one batch, through the same commit code. There is no way to group two calls into one atomic unit, so a record and an object cannot yet be written together. There is no `BEGIN`, `COMMIT` or `ROLLBACK`.
 
 ## What is guaranteed
 

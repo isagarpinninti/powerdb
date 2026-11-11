@@ -1,6 +1,6 @@
-# On-disk format (layout 1)
+# On-disk format (layout 2)
 
-This describes the format written by version 0.3.1. It is the baseline every migration starts from. Layout number: **1** (`FORMAT_VERSION` in `engine/src/storage/mod.rs`).
+This describes the current format. Layout 1 (0.1 to 0.3.1) is the same without the `buckets` and `objects` keyspaces; layout 2 adds them (unreleased). Layout number: **2** (`FORMAT_VERSION` in `engine/src/storage/mod.rs`).
 
 ## Directory
 
@@ -36,12 +36,16 @@ All are fjall keyspaces under `meta/`. A commit writes across them in one atomic
 | `collections` | collection name | JSON `CollectionDef` (fields, rules, `encrypt`, `created_at`) |
 | `records` | `collection` + `0x00` + record id | JSON `Record` (`id`, `collection`, `created_at`, `updated_at`, `fields`, `files`) |
 | `files` | manifest id (32 bytes: BLAKE3 of the manifest) | manifest: ordered list of chunk key and length |
-| `file_refs` | manifest id | `u64` LE: number of records that reference this file |
+| `file_refs` | manifest id | `u64` LE: number of references to this file: record file fields plus object versions |
 | `chunks` | chunk key (32 bytes) | pointer: segment `u32`, offset `u64`, stored length `u32`, raw length `u32`, flags `u8` (21 bytes, LE) |
 | `chunk_refs` | chunk key | `u64` LE: number of manifests that contain this chunk |
 | `gc_queue` | manifest id | a dead file waiting to have its chunks released |
 | `seg_dead` | segment number | bytes of dead entries in that segment, to choose compaction candidates |
+| `buckets` (layout 2) | bucket name | JSON `BucketDef` (`name`, `versioning`, `encrypt`, `created_at`) |
+| `objects` (layout 2) | `bucket` + `0x00` + `key` + `0x00` + version id | JSON `ObjectMeta`: stable object id, version id, delete-marker flag, file id (the manifest id), size, MIME type, filename, BLAKE3 checksum of the content, created time, custom metadata |
 | `users`, `keys`, `sys` | (auth module) | users with Argon2id hashes, API key hashes and scopes, server secrets |
+
+Object version ids are time-ordered like record ids, so the newest version of a key is the last entry under its prefix. A key cannot contain a control character, which makes the `0x00` separators unambiguous. A delete marker has an empty file id and counts as no reference.
 
 Record ids are time-ordered strings: a 48-bit millisecond clock, a counter and random bits, so ordering by key is ordering by creation time.
 
@@ -49,6 +53,13 @@ Record ids are time-ordered strings: a 48-bit millisecond clock, a counter and r
 
 - A file's identity is the BLAKE3 hash of its manifest, so identical bytes chunked the same way have one identity. It is stable across backup, restore and migration because it depends only on content.
 - A record's identity is its id within its collection. Neither depends on a physical path or an offset; offsets live only in `chunks` and are rewritten by compaction.
+
+## Layout history
+
+| Layout | Versions | What changed |
+|---|---|---|
+| 1 | 0.1.0 to 0.3.1 | records, files, chunks, users, keys |
+| 2 | unreleased | adds `buckets` and `objects`; a file's reference count also counts object versions. Upgrade from 1: `meta/` is copied to `pre-migration-v1/`, nothing is rewritten, the marker becomes 2. An older binary refuses a layout-2 directory. |
 
 ## Versioning and upgrades
 
@@ -68,6 +79,4 @@ These are why the roadmap includes a layout change (see [ROADMAP.md](ROADMAP.md)
 
 - Typed values beyond JSON: no 64-bit integers, decimals, timestamps with zones, uuids, arrays or enums as distinct stored types.
 - Any index other than the primary key range.
-- A file independent of a record: there is no catalog of objects, buckets, keys or versions.
-- Reference counts that count anything other than record fields.
 - Per-record or per-object metadata outside the record's own JSON.

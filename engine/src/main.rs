@@ -421,9 +421,7 @@ fn object_command(action: ObjectCmd) -> i32 {
                         m.split_once('=')
                             .map(|(a, b)| (a.to_string(), b.to_string()))
                             .ok_or_else(|| {
-                                powerdb::Error::Invalid(format!(
-                                    "--meta wants NAME=VALUE, got \"{m}\""
-                                ))
+                                powerdb::Error::Cli(format!("--meta wants NAME=VALUE, got \"{m}\""))
                             })
                     })
                     .collect::<powerdb::Result<_>>()?;

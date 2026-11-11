@@ -79,6 +79,8 @@ const dashboard = [
   ['dashboard-code', async () => { await clickText('Code', '[role=tab]'); await waitFor(`document.querySelector('pre')`, 'code samples'); }],
   ['dashboard-keys', async () => { await clickText('API keys'); await waitFor(`document.body.innerText.includes('reporting service')`, 'the key list'); }],
   ['dashboard-system', async () => { await clickText('System'); await waitFor(`document.body.innerText.includes('Reclaim')`, 'the system page'); }],
+  ['dashboard-files', async () => { await clickText('documents'); await waitFor(`document.body.innerText.includes('msa-meridian.pdf')`, 'the file list'); }],
+  ['dashboard-versions', async () => { await evaluate(`document.querySelector('button[aria-label="Versions of legal/msa-meridian.pdf"]').click()`); await waitFor(`document.body.innerText.includes('newest')`, 'the version list'); }],
 ];
 const qs = (o) => '?' + new URLSearchParams(o).toString();
 const dashUrl = `http://127.0.0.1:${PROXY}/#key=${KEY}`;

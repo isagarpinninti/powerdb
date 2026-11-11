@@ -6,7 +6,7 @@ users, an API key). Used to take the screenshots in the README; handy for trying
     powerdb serve --data demo-data &
     python3 tools/demo-data.py http://127.0.0.1:8090 pdb_live_...
 """
-import json, random, struct, sys, urllib.request, zlib
+import json, random, struct, sys, urllib.parse, urllib.request, zlib
 
 BASE, KEY = sys.argv[1].rstrip("/"), sys.argv[2]
 rnd = random.Random(11)
@@ -106,8 +106,30 @@ for i in range(1042, 1042 + 36):
 for t, who in [("Master services agreement", "Meridian Credit Union"), ("Data processing addendum", "Halcyon Labs"), ("Support terms, 2026", "Kestrel Logistics")]:
     assert upload("contracts", {"title": t, "signed_by": who}, "contract.pdf", "application/pdf", pdf(t, [f"Counterparty: {who}", "Signed electronically."]), "file")[0] == 201
 
+# buckets: files with no record behind them
+assert js("POST", "/buckets", {"name": "documents", "versioning": True})[0] == 201
+assert js("POST", "/buckets", {"name": "exports"})[0] == 201
+
+
+def put_object(bucket, key, mime, data, meta=None):
+    h = {"content-type": mime, **{f"x-powerdb-meta-{k}": v for k, v in (meta or {}).items()}}
+    s, _ = call("PUT", f"/buckets/{bucket}/objects/{urllib.parse.quote(key)}", data, h)
+    assert s == 200, (bucket, key, s)
+
+
+put_object("documents", "legal/msa-meridian.pdf", "application/pdf", pdf("Master services agreement", ["Counterparty: Meridian Credit Union", "Draft 1"]), {"customer": "Meridian Credit Union"})
+put_object("documents", "legal/msa-meridian.pdf", "application/pdf", pdf("Master services agreement", ["Counterparty: Meridian Credit Union", "Draft 2, with the liability change"]), {"customer": "Meridian Credit Union"})
+put_object("documents", "legal/msa-meridian.pdf", "application/pdf", pdf("Master services agreement", ["Counterparty: Meridian Credit Union", "Signed electronically."]), {"customer": "Meridian Credit Union", "status": "signed"})
+put_object("documents", "legal/dpa-halcyon.pdf", "application/pdf", pdf("Data processing addendum", ["Counterparty: Halcyon Labs"]), {"customer": "Halcyon Labs"})
+put_object("documents", "brand/logo-light.png", "image/png", png(240, 160, (38, 70, 83), (42, 157, 143)))
+put_object("documents", "brand/logo-dark.png", "image/png", png(240, 160, (33, 37, 41), (108, 117, 125)))
+put_object("documents", "brand/guidelines.pdf", "application/pdf", pdf("Brand guidelines", ["Colours, type and logo use."]))
+put_object("documents", "onboarding/welcome-pack.pdf", "application/pdf", pdf("Welcome pack", ["Everything a new customer needs."]))
+put_object("exports", "customers/2026-10.csv", "text/csv", b"name,email,plan,seats\n" + b"".join(f"{n},{e},{p},{s}\n".encode() for n, e, p, s in companies))
+put_object("exports", "customers/2026-09.csv", "text/csv", b"name,email,plan,seats\n" + b"".join(f"{n},{e},{p},{s}\n".encode() for n, e, p, s in companies[:9]))
+
 for e in ["maya@northwind.example", "dev@halcyon.example", "support@brightwater.example"]:
     assert js("POST", "/users", {"email": e, "password": "demo-password-123"})[0] == 201
 s, k = js("POST", "/keys", {"name": "reporting service", "access": "read", "collections": ["invoices", "customers"]})
 assert s == 201, k
-print("demo data ready: 4 collections, 12 customers, 6 products, 36 invoices, 3 contracts (encrypted), 3 users, 1 API key")
+print("demo data ready: 4 collections, 12 customers, 6 products, 36 invoices, 3 contracts (encrypted), 2 buckets with 10 objects, 3 users, 1 API key")

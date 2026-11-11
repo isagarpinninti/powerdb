@@ -19,6 +19,13 @@ libFuzzer targets in `fuzz/`). Platform-specific code is exercised in CI on Linu
 | Service install | A data path with a space broke the unit; a newline in an argument could add systemd directives. | Arguments are quoted for systemd and validated; account names are restricted. |
 | OAuth | The unauthenticated `start` endpoint could be used to fill the table of sign-ins in progress. | Per-client rate limit on `start` and `callback`. |
 
+## Buckets and objects (new, unreleased)
+- **Administrators only.** Every route under `/api/v1/buckets` requires an administrator key or account; a scoped key or an ordinary user gets 403 and an anonymous caller 401. Tested. Per-bucket permissions do not exist yet, so there is no way to give someone access to one bucket.
+- **The permission check comes before the body is read.** An upload is refused for a caller who may not make it before a byte is accepted, and a malformed JSON body cannot change the answer a caller without permission gets (it did, with a 422, until the new routes were written to parse the body after the check; the older admin routes still answer 422 first).
+- **Uploads get the same checks as record files:** the first bytes are compared with the declared type (a program called `image/png` is refused), and the size limit is enforced while bytes arrive. A body cut short is not stored as a shorter object.
+- **Keys are labels, never paths.** They are never turned into a file name; the rules (no control characters, no leading `/`, no `.` or `..` segment, at most 1024 bytes) keep them unambiguous. Metadata names and values are length- and character-limited.
+- **Not covered:** no quotas per bucket, no per-object permissions, no audit log of who read what.
+
 ## Designed in (and tested)
 - **OAuth:** authorization-code flow with PKCE; single-use, provider-bound, expiring state; exact-match redirect allow-list (no open redirect);
   token in the URL fragment; verified emails only; administrators excluded unless `allow_admin`; accounts created only with open registration.

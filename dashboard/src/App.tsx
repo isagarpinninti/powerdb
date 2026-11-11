@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { CollectionDef } from '@sdk';
+import type { BucketInfo, CollectionDef } from '@sdk';
 import { Logo } from './Logo';
 import { applyTheme, readTheme } from './theme';
 import { DESKTOP_ORIGINS, db, embedded, useSession } from './session';
 import { Button, ErrorBox, Spinner, cn } from './ui';
 import { CollectionView } from './views/CollectionView';
+import { BucketView, NewBucket } from './views/Files';
 import { Keys } from './views/Keys';
 import { Login } from './views/Login';
 import { NewCollection } from './views/NewCollection';
 import { System } from './views/System';
 import { Users } from './views/Users';
 
-export type Nav = { page: 'collection'; name: string } | { page: 'new' } | { page: 'users' } | { page: 'keys' } | { page: 'system' } | { page: 'home' };
+export type Nav = { page: 'collection'; name: string } | { page: 'bucket'; name: string } | { page: 'new' } | { page: 'users' } | { page: 'keys' } | { page: 'system' } | { page: 'home' };
 
 function useTheme() {
   const [dark, setDark] = useState(() => readTheme() === 'dark');
@@ -28,11 +29,15 @@ export function App() {
   const theme = useTheme();
   const [nav, setNav] = useState<Nav>({ page: 'home' });
   const [collections, setCollections] = useState<CollectionDef[] | null>(null);
+  const [buckets, setBuckets] = useState<BucketInfo[] | null>(null);
+  const [newBucket, setNewBucket] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setCollections(await db.admin.collections.list());
+      const [cols, bks] = await Promise.all([db.admin.collections.list(), db.buckets.list()]);
+      setCollections(cols);
+      setBuckets(bks);
       setError(null);
     } catch (e) {
       setError(e);
@@ -80,6 +85,18 @@ export function App() {
             ))}
           </div>
           <div>
+            <div className="mb-1 flex items-center justify-between px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
+              Files
+              <button className="rounded px-1.5 text-base leading-none text-muted hover:bg-raised" title="New bucket" aria-label="New bucket" onClick={() => setNewBucket(true)}>+</button>
+            </div>
+            {buckets?.length === 0 && <p className="px-3 py-2 text-xs text-muted">No buckets yet.</p>}
+            {buckets?.map((b) => (
+              <button key={b.name} className={item(nav.page === 'bucket' && nav.name === b.name)} onClick={() => setNav({ page: 'bucket', name: b.name })}>
+                <span className="truncate">{b.name}</span>
+              </button>
+            ))}
+          </div>
+          <div>
             <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">Administration</div>
             <button className={item(nav.page === 'users')} onClick={() => setNav({ page: 'users' })}>Users</button>
             <button className={item(nav.page === 'keys')} onClick={() => setNav({ page: 'keys' })}>API keys</button>
@@ -102,11 +119,13 @@ export function App() {
           {nav.page === 'home' && <Home collections={collections} go={setNav} />}
           {nav.page === 'new' && <NewCollection onCreated={async (name) => { await refresh(); setNav({ page: 'collection', name }); }} />}
           {nav.page === 'collection' && <CollectionView key={nav.name} name={nav.name} onChanged={refresh} onDropped={async () => { await refresh(); setNav({ page: 'home' }); }} />}
+          {nav.page === 'bucket' && <BucketView key={nav.name} name={nav.name} onChanged={refresh} onDropped={async () => { await refresh(); setNav({ page: 'home' }); }} />}
           {nav.page === 'users' && <Users />}
           {nav.page === 'keys' && <Keys collections={collections ?? []} />}
           {nav.page === 'system' && <System />}
         </div>
       </main>
+      {newBucket && <NewBucket onClose={() => setNewBucket(false)} onCreated={async (name) => { setNewBucket(false); await refresh(); setNav({ page: 'bucket', name }); }} />}
     </div>
   );
 }

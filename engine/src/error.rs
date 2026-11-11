@@ -14,6 +14,8 @@ pub enum Error {
     Denied(String),
     /// The thing already exists (409).
     Conflict(String),
+    /// A message for the person running a command-line client, shown as it is.
+    Cli(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -29,6 +31,7 @@ impl fmt::Display for Error {
             Error::Corrupt(m) => write!(f, "corrupt data: {m}"),
             Error::Denied(m) => write!(f, "denied: {m}"),
             Error::Conflict(m) => write!(f, "conflict: {m}"),
+            Error::Cli(m) => write!(f, "{m}"),
         }
     }
 }

@@ -60,9 +60,9 @@ Everything below was read from the source at commit `4bf2518` unless it is marke
 | Secondary indexes (B-tree, unique, composite) | No | Only the primary key range is indexed; any other filter is a scan. |
 | Constraints: unique, check, default, foreign key | Partly | `required`, `max` and MIME rules exist. **Relation fields are validated as strings only: nothing checks the target exists, and deleting a target does not touch referrers** (read in `model.rs`; no check found in `storage/mod.rs` or `api/records.rs`). |
 | Relationships: one-to-many, many-to-many | No | A relation field holds an id; nothing joins or enforces. |
-| Standalone objects / buckets / keys | No | A file exists only as a field of a record. A record is required to store a file. |
-| Object versions, soft delete, retention | No | A replaced file is released and garbage-collected. |
-| Object metadata queries | No | Name, size and MIME are in the record's `FileRef`; not queryable across records. |
+| Standalone objects / buckets / keys | Yes (unreleased) | `buckets` and `objects` keyspaces, HTTP routes, CLI, SDK and dashboard view. A file no longer needs a record. Administrator-only for now. |
+| Object versions, soft delete, retention | Partly | Optional versioning, delete markers (the soft delete) and restore exist. Retention and expiry do not. |
+| Object metadata queries | Partly | Objects carry filename, MIME, size, checksum and custom metadata, and can be listed by key prefix. Filtering by metadata is not built. |
 | File-to-file relationships | No | |
 | `FILE[]` | No | One file per file field. |
 | SQL | No | The query language is a filter expression over one collection. |
@@ -89,7 +89,7 @@ Everything below was read from the source at commit `4bf2518` unless it is marke
 
 These are the places where the brief and the present design pull against each other. Each needs a decision before work starts.
 
-1. **A file has no life of its own.** Today a file is reachable only through a record field, and its id is the hash of its manifest. The brief wants buckets, keys, versions and metadata independent of any record. Content-addressing stays: the manifest id identifies *bytes*. What is missing is an object catalog (bucket, key, version → manifest id, plus metadata) and reference counting that counts catalog entries as well as record fields.
+1. **A file has no life of its own.** *(Resolved in Phase 1.)* A file used to be reachable only through a record field. The object catalog (bucket, key, version → manifest id, plus metadata) now exists and counts as a reference, through the same commit code as record files. Content-addressing is unchanged: the manifest id identifies *bytes*.
 2. **The record model is a JSON map.** Typed columns, constraints and SQL need a typed row representation and a catalog. Fields stored as JSON numbers cannot represent `INT64` or `DECIMAL` faithfully (JSON numbers are doubles in most clients). The type system must be added to the storage format, not just the API.
 3. **No indexes beyond the primary key.** A SQL planner without secondary indexes is a table-scan engine. Index maintenance has to be part of the same atomic commit as the record.
 4. **The commit path is a mutex plus one batch.** That is correct for one record. A multi-statement transaction needs buffered writes, conflict detection and a defined isolation level, on top of fjall's batch and snapshot primitives. Whether fjall's own transactional keyspaces fit is **not verified** and is the first thing to evaluate.

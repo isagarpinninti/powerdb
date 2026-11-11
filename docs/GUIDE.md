@@ -222,6 +222,63 @@ A collection created with `"encrypt": true` stores its files encrypted on disk. 
 
 To replace a file, `PATCH` with a multipart body that includes the file part. To remove one, set the field to `null`.
 
+## Files without records
+
+A record is not required to store a file. A **bucket** is a named container; an **object** is a file in it, reached by a name (its *key*) such as `contracts/2026/acme.pdf`. The slashes are only a habit: there are no real folders, but you can list by prefix.
+
+Buckets and objects are for administrators for now. Use an administrator key (`powerdb init` printed one).
+
+```bash
+export POWERDB_KEY=pdb_live_...        # and POWERDB_URL=https://... if the server is not on this machine
+
+powerdb bucket create documents
+powerdb object put documents/contracts/acme.pdf ./acme.pdf
+powerdb object ls documents contracts/
+powerdb object get documents/contracts/acme.pdf ./downloaded.pdf
+powerdb object rm documents/contracts/acme.pdf
+```
+
+`put` guesses the content type from the file name; `--type application/pdf` sets it, and `--meta customer=acme` adds a note (repeatable). `-` reads from standard input or writes to standard output. Files stream in both directions, so a very large file does not need that much memory.
+
+The same over HTTP. The file is the request body:
+
+```bash
+curl -X POST -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  $H/buckets -d '{"name": "documents", "versioning": true}'
+
+curl -X PUT -H "authorization: Bearer $KEY" -H 'content-type: application/pdf' \
+  -H 'x-powerdb-meta-customer: acme' --data-binary @acme.pdf \
+  "$H/buckets/documents/objects/contracts/acme.pdf?filename=acme.pdf"
+
+curl -H "authorization: Bearer $KEY" -o back.pdf $H/buckets/documents/objects/contracts/acme.pdf
+curl -H "authorization: Bearer $KEY" -H 'Range: bytes=0-1023' $H/buckets/documents/objects/contracts/acme.pdf
+curl -I -H "authorization: Bearer $KEY" $H/buckets/documents/objects/contracts/acme.pdf   # size, type, checksum, no download
+curl -H "authorization: Bearer $KEY" "$H/buckets/documents/objects?prefix=contracts/&limit=100"
+```
+
+The answer for an object carries its size, content type, a checksum (BLAKE3 of the content), the time and your metadata. Like record files, an upload is judged by its first bytes, not its name: a program uploaded as `image/png` is refused, and nothing is stored.
+
+### Versions
+
+A bucket created with `--versioning` (or `"versioning": true`) keeps every upload:
+
+```bash
+powerdb bucket create history --versioning
+powerdb object put history/doc.txt ./v1.txt
+powerdb object put history/doc.txt ./v2.txt
+powerdb object versions history/doc.txt           # newest first, with their ids
+powerdb object get history/doc.txt - --version <id>
+powerdb object rm history/doc.txt                 # hides it; every version is kept
+powerdb object restore history/doc.txt --version <id>   # makes an old version the newest again
+powerdb object rm history/doc.txt --version <id>  # removes that one version for good
+```
+
+Without versioning an upload replaces the object and a delete removes it for good. Versioning can be switched on later (`powerdb bucket versioning NAME`) but not off. A bucket must be empty, delete markers included, before it can be deleted.
+
+Identical content is stored once, however many keys and versions name it, and an object and a record's file can share one stored copy. Add `--encrypt` when creating a bucket to encrypt its data on disk.
+
+From TypeScript: `db.buckets.create('documents')`, `db.bucket('documents').put('a/b.pdf', bytes)`, `.download(key)`, `.list({ prefix })`, `.versions(key)`, `.restore(key, version)`. The dashboard has a **Files** section with the same operations.
+
 ## Who can do what
 
 ![The access rules editor](screenshots/dashboard-rules.webp)
@@ -443,6 +500,8 @@ Or put a proxy such as Caddy or nginx in front and start the server with `--trus
 | `powerdb backup --to DIR` | Copy a stopped database. |
 | `powerdb restore --from DIR --data DIR` | Verify a backup and restore it into an empty folder. |
 | `powerdb create-key --name N` | Make an API key without starting the server. `--access read\|write\|read-write` (default read), `--collection`, `--admin` (full access, skips rules). |
+| `powerdb bucket create\|ls\|rm\|versioning` | Buckets on a running server. `--url` and `--key` (or `POWERDB_URL`, `POWERDB_KEY`). |
+| `powerdb object put\|get\|ls\|rm\|versions\|restore` | Files in buckets on a running server. `put BUCKET/KEY FILE`, `get BUCKET/KEY [FILE]`, `--version`, `--meta`, `--type`. |
 | `powerdb service ...` | `install`, `uninstall`, `start`, `stop`, `status` for the operating system's service manager. |
 | `powerdb bench` | Measure the storage engine on this machine. |
 
@@ -464,6 +523,10 @@ All paths are under `/api/v1`. Send `authorization: Bearer <key or token>`.
 | `GET, POST /collections/{name}/records` | List with `filter`, `sort`, `limit`, `offset`; create (JSON or multipart). |
 | `GET, PATCH, DELETE /collections/{name}/records/{id}` | One record. |
 | `GET /files/{collection}/{id}/{field}` | A file; supports `Range` and a `?token=` link. |
+| `GET, POST /buckets`; `GET, PATCH, DELETE /buckets/{name}` | Buckets (administrators). `PATCH` with `{"versioning": true}` turns versioning on. |
+| `PUT, GET, HEAD, DELETE /buckets/{name}/objects/{key}` | An object. `PUT` takes the file as the request body (`?filename=`, `X-PowerDB-Meta-*` headers); `GET` supports `Range` and `?version=`; `DELETE` takes `?version=`. |
+| `GET /buckets/{name}/objects` | List by `prefix`, with `after` (the previous page's `next`) and `limit`. |
+| `GET /buckets/{name}/versions?key=` , `POST /buckets/{name}/restore` | Versions of a key, newest first; restore one with `{"key": ..., "version": ...}`. |
 | `GET, POST /keys`, `DELETE /keys/{id}` | API keys. |
 | `GET, POST /users`, `DELETE /users/{id}` | Accounts. |
 | `GET, POST /maintenance/backups` | List or take backups. |

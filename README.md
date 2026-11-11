@@ -10,6 +10,8 @@ It is one program. It serves an HTTP API and a web dashboard from the same port,
 
 ![The dashboard inside the app, showing collections](docs/screenshots/app-data.webp)
 
+![A versioned bucket of files](docs/screenshots/dashboard-files.webp)
+
 ## What it is for
 
 Think of the data behind an invoicing tool, a document manager, a small SaaS product or an internal admin app: rows with attachments, a few users, rules about who sees what. You would normally combine a relational database, an object store, a signed-URL service and some glue. PowerDB is those four things in one process, aimed at the case where you would rather run one thing.
@@ -19,6 +21,7 @@ It is not a replacement for PostgreSQL. There are no joins, no SQL, and no clust
 ## What you get
 
 - **Records and files saved together.** A save either happens completely or not at all, including after a crash.
+- **Files on their own.** Buckets and objects: store any file under a name (`documents/contracts/acme.pdf`) with no record behind it, optionally keeping every version. They share the same chunk store, so duplicates cost nothing and backups, checks and encryption cover them.
 - **Files stored once.** Files are cut into chunks and each chunk is stored once, so a file uploaded twice, or a new version of a file that mostly repeats the old one, costs little extra space.
 - **Rules.** Each collection says who may list, view, create, update and delete, in a short expression such as `@request.auth.id == owner_id`. A collection with no rules is usable by administrators only.
 - **Checks on uploads.** A file is judged by its first bytes, not its name: a program renamed to `photo.png` is refused. Size limits are enforced while the upload arrives.
@@ -80,6 +83,16 @@ const post = await db.collection('articles').create({
 const hello = await db.collection('articles').where`title ~ ${'Hello'}`.all();
 ```
 
+Files do not need a record. Put one in a bucket and get it back:
+
+```bash
+export POWERDB_KEY=pdb_live_...
+powerdb bucket create documents --versioning
+powerdb object put documents/contracts/acme.pdf ./acme.pdf
+powerdb object get documents/contracts/acme.pdf ./downloaded.pdf
+powerdb object ls documents contracts/
+```
+
 **[docs/GUIDE.md](docs/GUIDE.md)** covers all of this properly: collections and fields, queries, files, rules, users and API keys, the SDK, backups, running it for real, and fixes for the problems people hit most. Every command in it was run against a real server.
 
 ## How it works
@@ -109,7 +122,8 @@ Things it has **not** had, and that you should weigh before trusting it with dat
 - No test of power loss. The crash tests kill the process; they cannot show what a disk does with unflushed writes.
 - OAuth sign-in is tested against a stand-in provider, not yet against Google or GitHub themselves.
 - The installers are not signed by Apple or Microsoft, so first launch shows a warning.
-- There is one on-disk format so far, so upgrades between formats have never run on real data.
+- There have been two on-disk formats. The one upgrade (1 to 2, which adds buckets and objects) is tested on data written by a released version, but not on large or long-lived databases.
+- Buckets and objects are usable by administrators only for now; per-bucket permissions are planned, not built.
 
 Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 

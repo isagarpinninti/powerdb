@@ -13,7 +13,7 @@ pub struct Client {
 }
 
 fn fail(m: impl Into<String>) -> Error {
-    Error::Invalid(m.into())
+    Error::Cli(m.into())
 }
 
 /// `bucket/key` into its two parts. The key may contain slashes; the bucket may not.
