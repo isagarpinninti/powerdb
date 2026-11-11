@@ -300,3 +300,78 @@ pub async fn read_multipart(
     }
     Ok(up)
 }
+
+/// Stages a raw request body as an object's bytes, through the same streaming path as a multipart part: the first bytes are checked against the declared
+/// type before anything is written, and the size limit is enforced as bytes arrive.
+pub async fn stage_stream(
+    st: &AppState,
+    bucket: &str,
+    mime: String,
+    filename: Option<String>,
+    body: axum::body::Body,
+) -> Result<PendingFile, ApiError> {
+    use futures_util::StreamExt;
+    let (tx, rx) = mpsc::channel::<Bytes>(8);
+    let shared = Arc::new(Shared::default());
+    let reader = UploadReader {
+        rx,
+        declared: mime.clone(),
+        max: st.cfg.max_upload_bytes,
+        total: 0,
+        buf: Bytes::new(),
+        pos: 0,
+        primed: false,
+        shared: shared.clone(),
+    };
+    let db = st.db.clone();
+    let b = bucket.to_string();
+    let declared = mime.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        db.stage_object(&b, &declared, filename.as_deref(), reader)
+    });
+    let mut stream = body.into_data_stream();
+    let mut transport_error = None;
+    while let Some(next) = stream.next().await {
+        match next {
+            Ok(c) => {
+                if tx.send(c).await.is_err() {
+                    break; // the writer gave up (rejected content, too large, or an error): stop reading
+                }
+            }
+            Err(e) => {
+                transport_error = Some(ApiError::bad_request(&format!(
+                    "the upload was interrupted: {e}"
+                )));
+                break;
+            }
+        }
+    }
+    drop(tx);
+    let result = job
+        .await
+        .map_err(|_| ApiError::internal("upload task failed"))?;
+    if let Some((status, msg)) = shared
+        .failure
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        return Err(ApiError::new(
+            status,
+            if status == StatusCode::PAYLOAD_TOO_LARGE {
+                "too_large"
+            } else {
+                "invalid"
+            },
+            msg,
+        ));
+    }
+    if let Some(e) = transport_error {
+        return Err(e); // a body cut short must not become a (shorter) object
+    }
+    let mut p = result.map_err(ApiError::from)?;
+    if let Some(m) = shared.mime.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        p.mime = m;
+    }
+    Ok(p)
+}

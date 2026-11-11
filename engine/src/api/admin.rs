@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-fn admin(who: &Principal) -> Result<(), ApiError> {
+pub(super) fn admin(who: &Principal) -> Result<(), ApiError> {
     match who {
         p if p.is_admin() => Ok(()),
         Principal::Anonymous => Err(ApiError::unauthorized("sign in as an administrator")),
@@ -18,7 +18,7 @@ fn admin(who: &Principal) -> Result<(), ApiError> {
     }
 }
 
-async fn blocking<T: Send + 'static>(
+pub(super) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, crate::Error> + Send + 'static,
 ) -> Result<T, ApiError> {
     tokio::task::spawn_blocking(f)

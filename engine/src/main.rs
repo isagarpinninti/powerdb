@@ -135,10 +135,121 @@ enum Cmd {
         #[command(subcommand)]
         action: ServiceCmd,
     },
+    /// Buckets on a running server: create, list, delete.
+    Bucket {
+        #[command(subcommand)]
+        action: BucketCmd,
+    },
+    /// Files in buckets on a running server: put, get, list, delete, versions.
+    Object {
+        #[command(subcommand)]
+        action: ObjectCmd,
+    },
     /// Measure the storage engine on this machine.
     Bench {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+}
+
+/// Where the server is and who is asking: for the commands that talk to a running server.
+#[derive(clap::Args)]
+struct Remote {
+    /// The server's address.
+    #[arg(long, env = "POWERDB_URL", default_value = "http://127.0.0.1:8090")]
+    url: String,
+    /// An administrator API key (`powerdb init` printed one).
+    #[arg(long, env = "POWERDB_KEY", hide_env_values = true)]
+    key: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum BucketCmd {
+    /// Create a bucket.
+    Create {
+        name: String,
+        /// Keep every version of every object.
+        #[arg(long)]
+        versioning: bool,
+        /// Encrypt the bucket's file data at rest.
+        #[arg(long)]
+        encrypt: bool,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// List the buckets.
+    Ls {
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Delete an empty bucket.
+    Rm {
+        name: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Turn versioning on for a bucket (it cannot be turned off).
+    Versioning {
+        name: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+}
+
+#[derive(Subcommand)]
+enum ObjectCmd {
+    /// Upload a file as BUCKET/KEY (`-` reads standard input).
+    Put {
+        /// BUCKET/KEY, for example documents/contracts/acme.pdf
+        path: String,
+        file: PathBuf,
+        /// The content type. Default: guessed from the file name.
+        #[arg(long = "type")]
+        mime: Option<String>,
+        /// Custom metadata, NAME=VALUE (repeatable).
+        #[arg(long = "meta")]
+        meta: Vec<String>,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Download BUCKET/KEY to a file (default: its last name in the current folder; `-` writes to standard output).
+    Get {
+        path: String,
+        to: Option<PathBuf>,
+        /// A specific version instead of the newest.
+        #[arg(long)]
+        version: Option<String>,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// List the objects in a bucket, optionally only those whose key starts with PREFIX.
+    Ls {
+        bucket: String,
+        prefix: Option<String>,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Delete BUCKET/KEY. In a bucket with versioning this hides it; add --version to remove one version for good.
+    Rm {
+        path: String,
+        #[arg(long)]
+        version: Option<String>,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// List every version of BUCKET/KEY, newest first.
+    Versions {
+        path: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Make an old version of BUCKET/KEY the newest again.
+    Restore {
+        path: String,
+        #[arg(long)]
+        version: String,
+        #[command(flatten)]
+        remote: Remote,
     },
 }
 
@@ -200,6 +311,225 @@ fn fail(e: impl std::fmt::Display) -> i32 {
     1
 }
 
+fn client(r: Remote) -> powerdb::Result<powerdb::client::Client> {
+    powerdb::client::Client::new(&r.url, r.key)
+}
+
+/// Epoch milliseconds as `YYYY-MM-DD HH:MM` (UTC), without pulling in a date library.
+fn fmt_time(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // civil-from-days (H. Hinnant)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        rem / 3600,
+        rem % 3600 / 60
+    )
+}
+
+fn human(n: u64) -> String {
+    const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
+}
+
+fn bucket_command(action: BucketCmd) -> i32 {
+    let run = || -> powerdb::Result<()> {
+        match action {
+            BucketCmd::Create {
+                name,
+                versioning,
+                encrypt,
+                remote,
+            } => {
+                client(remote)?.bucket_create(&name, versioning, encrypt)?;
+                println!(
+                    "Created bucket {name}{}{}",
+                    if versioning { " (versioned)" } else { "" },
+                    if encrypt { " (encrypted)" } else { "" }
+                );
+            }
+            BucketCmd::Ls { remote } => {
+                let v = client(remote)?.buckets()?;
+                let items = v["items"].as_array().cloned().unwrap_or_default();
+                if items.is_empty() {
+                    println!("No buckets.");
+                }
+                for b in items {
+                    let flags: Vec<&str> = [("versioned", "versioning"), ("encrypted", "encrypt")]
+                        .iter()
+                        .filter(|(_, k)| b[*k].as_bool() == Some(true))
+                        .map(|(l, _)| *l)
+                        .collect();
+                    println!(
+                        "{:<30} {}",
+                        b["name"].as_str().unwrap_or(""),
+                        flags.join(", ")
+                    );
+                }
+            }
+            BucketCmd::Rm { name, remote } => {
+                client(remote)?.bucket_delete(&name)?;
+                println!("Deleted bucket {name}");
+            }
+            BucketCmd::Versioning { name, remote } => {
+                client(remote)?.bucket_versioning(&name)?;
+                println!("Versioning is on for {name}");
+            }
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => fail(e),
+    }
+}
+
+fn object_command(action: ObjectCmd) -> i32 {
+    use powerdb::client::split_path;
+    let run = || -> powerdb::Result<()> {
+        match action {
+            ObjectCmd::Put {
+                path,
+                file,
+                mime,
+                meta,
+                remote,
+            } => {
+                let (b, k) = split_path(&path)?;
+                let meta: Vec<(String, String)> = meta
+                    .iter()
+                    .map(|m| {
+                        m.split_once('=')
+                            .map(|(a, b)| (a.to_string(), b.to_string()))
+                            .ok_or_else(|| {
+                                powerdb::Error::Invalid(format!(
+                                    "--meta wants NAME=VALUE, got \"{m}\""
+                                ))
+                            })
+                    })
+                    .collect::<powerdb::Result<_>>()?;
+                let v = client(remote)?.object_put(b, k, &file, mime.as_deref(), &meta)?;
+                let o = &v["object"];
+                println!(
+                    "Stored {b}/{k}  {}  version {}  checksum (BLAKE3) {}",
+                    human(o["size"].as_u64().unwrap_or(0)),
+                    o["version_id"].as_str().unwrap_or(""),
+                    o["checksum"].as_str().unwrap_or("")
+                );
+            }
+            ObjectCmd::Get {
+                path,
+                to,
+                version,
+                remote,
+            } => {
+                let (b, k) = split_path(&path)?;
+                let to = to.unwrap_or_else(|| PathBuf::from(k.rsplit('/').next().unwrap_or(k)));
+                let n = client(remote)?.object_get(b, k, version.as_deref(), &to)?;
+                if to.as_os_str() != "-" {
+                    println!("Wrote {} to {}", human(n), to.display());
+                }
+            }
+            ObjectCmd::Ls {
+                bucket,
+                prefix,
+                remote,
+            } => {
+                let c = client(remote)?;
+                let prefix = prefix.unwrap_or_default();
+                let mut after: Option<String> = None;
+                let mut total = 0usize;
+                loop {
+                    let v = c.objects(&bucket, &prefix, after.as_deref())?;
+                    for o in v["items"].as_array().cloned().unwrap_or_default() {
+                        println!(
+                            "{:>10}  {}  {}",
+                            human(o["size"].as_u64().unwrap_or(0)),
+                            fmt_time(o["created_at"].as_i64().unwrap_or(0)),
+                            o["key"].as_str().unwrap_or("")
+                        );
+                        total += 1;
+                    }
+                    match v["next"].as_str() {
+                        Some(n) => after = Some(n.to_string()),
+                        None => break,
+                    }
+                }
+                if total == 0 {
+                    println!("No objects.");
+                }
+            }
+            ObjectCmd::Rm {
+                path,
+                version,
+                remote,
+            } => {
+                let (b, k) = split_path(&path)?;
+                client(remote)?.object_delete(b, k, version.as_deref())?;
+                println!(
+                    "Deleted {b}/{k}{}",
+                    version
+                        .map(|v| format!(" (version {v})"))
+                        .unwrap_or_default()
+                );
+            }
+            ObjectCmd::Versions { path, remote } => {
+                let (b, k) = split_path(&path)?;
+                let v = client(remote)?.versions(b, k)?;
+                for o in v["items"].as_array().cloned().unwrap_or_default() {
+                    let what = if o["delete_marker"].as_bool() == Some(true) {
+                        "(deleted)".to_string()
+                    } else {
+                        human(o["size"].as_u64().unwrap_or(0))
+                    };
+                    println!(
+                        "{}  {}  {}",
+                        o["version_id"].as_str().unwrap_or(""),
+                        fmt_time(o["created_at"].as_i64().unwrap_or(0)),
+                        what
+                    );
+                }
+            }
+            ObjectCmd::Restore {
+                path,
+                version,
+                remote,
+            } => {
+                let (b, k) = split_path(&path)?;
+                let v = client(remote)?.restore(b, k, &version)?;
+                println!(
+                    "Restored {b}/{k} as version {}",
+                    v["object"]["version_id"].as_str().unwrap_or("")
+                );
+            }
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => fail(e),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -232,6 +562,12 @@ async fn main() {
     }
     let code = match cli.cmd {
         Cmd::Service { action } => service_command(action).await,
+        Cmd::Bucket { action } => tokio::task::spawn_blocking(move || bucket_command(action))
+            .await
+            .unwrap_or(1),
+        Cmd::Object { action } => tokio::task::spawn_blocking(move || object_command(action))
+            .await
+            .unwrap_or(1),
         Cmd::Bench { args } => tokio::task::spawn_blocking(move || bench::run(&args))
             .await
             .unwrap_or(1),

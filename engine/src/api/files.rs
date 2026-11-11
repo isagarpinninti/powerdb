@@ -96,30 +96,55 @@ pub async fn download(
         None => authorize(&who, &def, Action::View, Some(&rec), None)?,
     }
     let fid = from_hex_32(&f.id).ok_or_else(|| ApiError::internal("bad file id"))?;
+    serve_file(
+        &st,
+        fid,
+        &f.mime,
+        f.name.as_deref(),
+        format!("\"{}\"", f.id),
+        &headers,
+        vec![],
+    )
+    .await
+}
+
+/// Streams a stored file as an HTTP response: validators, ranges, a safe content disposition and a locked-down content security policy. A record's file
+/// and an object share it. `extra` adds headers of the caller's own (an object's version id and metadata).
+pub(super) async fn serve_file(
+    st: &AppState,
+    fid: [u8; 32],
+    mime: &str,
+    name: Option<&str>,
+    etag: String,
+    headers: &HeaderMap,
+    extra: Vec<(axum::http::HeaderName, HeaderValue)>,
+) -> Result<Response, ApiError> {
     let db = st.db.clone();
     let manifest = tokio::task::spawn_blocking(move || db.manifest(&fid))
         .await
         .map_err(|_| ApiError::internal("task failed"))??;
     let size = manifest.size;
-    let etag = format!("\"{}\"", f.id);
     let mut resp = Response::builder()
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ETAG, &etag)
         .header(header::CACHE_CONTROL, "private, max-age=0, must-revalidate")
         .header(
             header::CONTENT_TYPE,
-            HeaderValue::from_str(&f.mime)
+            HeaderValue::from_str(mime)
                 .unwrap_or(HeaderValue::from_static("application/octet-stream")),
         )
         .header(
             header::CONTENT_DISPOSITION,
-            HeaderValue::from_str(&disposition(&f.mime, f.name.as_deref()))
+            HeaderValue::from_str(&disposition(mime, name))
                 .unwrap_or(HeaderValue::from_static("attachment")),
         )
         .header(
             header::CONTENT_SECURITY_POLICY,
             "default-src 'none'; sandbox",
         );
+    for (k, v) in extra {
+        resp = resp.header(k, v);
+    }
     if headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())

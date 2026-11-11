@@ -685,3 +685,334 @@ async fn the_v1_contract_is_unchanged() {
         "deleted_records:number",
     );
 }
+
+#[tokio::test]
+async fn the_bucket_and_object_routes_are_unchanged() {
+    let dir = Dir(std::env::temp_dir().join(format!("powerdb-contract-{}", new_id())));
+    let (st, boot) = server::build_state(
+        &dir.0,
+        Options {
+            durability: Durability::Never,
+            ..Options::default()
+        },
+        Config::default(),
+    )
+    .unwrap();
+    let admin = boot
+        .admin_key
+        .expect("the first run mints an administrator key");
+    let admin = admin.as_str();
+    let mut c = Ctx {
+        app: api::router(st),
+        printing: std::env::var("POWERDB_CONTRACT_PRINT").is_ok(),
+    };
+    let r = c.get("/buckets", None).await;
+    c.pin(
+        "GET /buckets (no credentials)",
+        &r,
+        401,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .json(
+            "POST",
+            "/buckets",
+            Some(admin),
+            serde_json::json!({"name": "docs"}),
+        )
+        .await;
+    c.pin("POST /buckets", &r, 201, "bucket:object,bucket.created_at:number,bucket.encrypt:bool,bucket.name:string,bucket.versioning:bool");
+    let r = c
+        .json(
+            "POST",
+            "/buckets",
+            Some(admin),
+            serde_json::json!({"name": "docs"}),
+        )
+        .await;
+    c.pin(
+        "POST /buckets (duplicate)",
+        &r,
+        409,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .json(
+            "POST",
+            "/buckets",
+            Some(admin),
+            serde_json::json!({"name": "Bad Name"}),
+        )
+        .await;
+    c.pin(
+        "POST /buckets (bad name)",
+        &r,
+        400,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c.get("/buckets", Some(admin)).await;
+    c.pin("GET /buckets", &r, 200, "items:array,items[].created_at:number,items[].encrypt:bool,items[].name:string,items[].versioning:bool");
+    let r = c.get("/buckets/docs", Some(admin)).await;
+    c.pin("GET /buckets/{name}", &r, 200, "bucket:object,bucket.created_at:number,bucket.encrypt:bool,bucket.name:string,bucket.versioning:bool");
+    let r = c.get("/buckets/nope", Some(admin)).await;
+    c.pin(
+        "GET /buckets/{name} (missing)",
+        &r,
+        404,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .json(
+            "PATCH",
+            "/buckets/docs",
+            Some(admin),
+            serde_json::json!({"versioning": true}),
+        )
+        .await;
+    c.pin("PATCH /buckets/{name}", &r, 200, "bucket:object,bucket.created_at:number,bucket.encrypt:bool,bucket.name:string,bucket.versioning:bool");
+    let r = c
+        .json(
+            "PATCH",
+            "/buckets/docs",
+            Some(admin),
+            serde_json::json!({"versioning": false}),
+        )
+        .await;
+    c.pin(
+        "PATCH /buckets/{name} (versioning off)",
+        &r,
+        400,
+        "error:object,error.code:string,error.message:string",
+    );
+
+    let r = c
+        .call(
+            "PUT",
+            "/buckets/docs/objects/a/b.txt?filename=b.txt",
+            Some(admin),
+            Some("text/plain"),
+            b"hello".to_vec(),
+            &[("x-powerdb-meta-note", "hi")],
+        )
+        .await;
+    c.pin("PUT object", &r, 200, "object:object,object.bucket:string,object.checksum:string,object.created_at:number,object.delete_marker:bool,object.file_id:string,object.filename:string,object.id:string,object.key:string,object.metadata:object,object.mime:string,object.size:number,object.version_id:string");
+    let first = serde_json::from_slice::<Value>(&r.body).unwrap()["object"]["version_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = c
+        .call(
+            "PUT",
+            "/buckets/docs/objects/a/b.txt",
+            Some(admin),
+            Some("text/plain"),
+            b"hello again".to_vec(),
+            &[],
+        )
+        .await;
+    c.pin("PUT object (new version)", &r, 200, "object:object,object.bucket:string,object.checksum:string,object.created_at:number,object.delete_marker:bool,object.file_id:string,object.id:string,object.key:string,object.metadata:object,object.mime:string,object.size:number,object.version_id:string");
+    let r = c
+        .call(
+            "PUT",
+            "/buckets/docs/objects/..%2Fx",
+            Some(admin),
+            Some("text/plain"),
+            b"x".to_vec(),
+            &[],
+        )
+        .await;
+    c.pin(
+        "PUT object (bad key)",
+        &r,
+        400,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .call(
+            "PUT",
+            "/buckets/nope/objects/k",
+            Some(admin),
+            Some("text/plain"),
+            b"x".to_vec(),
+            &[],
+        )
+        .await;
+    c.pin(
+        "PUT object (missing bucket)",
+        &r,
+        404,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c.get("/buckets/docs/objects/a/b.txt", Some(admin)).await;
+    c.pin("GET object", &r, 200, "");
+    assert_eq!(r.body, b"hello again");
+    for h in [
+        "etag",
+        "content-type",
+        "content-length",
+        "accept-ranges",
+        "x-powerdb-version-id",
+        "x-powerdb-object-id",
+        "x-powerdb-meta-note",
+    ] {
+        if h != "x-powerdb-meta-note" {
+            assert!(
+                r.headers.contains_key(h),
+                "GET object: the {h} header is gone"
+            );
+        }
+    }
+    let r = c
+        .call(
+            "GET",
+            &format!("/buckets/docs/objects/a/b.txt?version={first}"),
+            Some(admin),
+            None,
+            vec![],
+            &[],
+        )
+        .await;
+    c.pin("GET object (version)", &r, 200, "");
+    assert_eq!(r.body, b"hello");
+    assert_eq!(
+        r.headers["x-powerdb-meta-note"], "hi",
+        "metadata comes back as X-PowerDB-Meta-* headers"
+    );
+    let r = c
+        .call(
+            "GET",
+            "/buckets/docs/objects/a/b.txt",
+            Some(admin),
+            None,
+            vec![],
+            &[("range", "bytes=0-1")],
+        )
+        .await;
+    c.pin("GET object (range)", &r, 206, "");
+    let r = c
+        .call(
+            "HEAD",
+            "/buckets/docs/objects/a/b.txt",
+            Some(admin),
+            None,
+            vec![],
+            &[],
+        )
+        .await;
+    c.pin("HEAD object", &r, 200, "");
+    assert!(r.body.is_empty());
+    let r = c.get("/buckets/docs/objects/missing", Some(admin)).await;
+    c.pin(
+        "GET object (missing)",
+        &r,
+        404,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c.get("/buckets/docs/objects", Some(admin)).await;
+    c.pin("GET objects", &r, 200, "items:array,items[].bucket:string,items[].checksum:string,items[].created_at:number,items[].delete_marker:bool,items[].file_id:string,items[].id:string,items[].key:string,items[].metadata:object,items[].mime:string,items[].size:number,items[].version_id:string,limit:number");
+    let r = c
+        .get("/buckets/docs/objects?prefix=a/&limit=1", Some(admin))
+        .await;
+    c.pin("GET objects (prefix, limit)", &r, 200, "items:array,items[].bucket:string,items[].checksum:string,items[].created_at:number,items[].delete_marker:bool,items[].file_id:string,items[].id:string,items[].key:string,items[].metadata:object,items[].mime:string,items[].size:number,items[].version_id:string,limit:number");
+    let r = c.get("/buckets/docs/objects?limit=0", Some(admin)).await;
+    c.pin(
+        "GET objects (bad limit)",
+        &r,
+        400,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .get("/buckets/docs/versions?key=a/b.txt", Some(admin))
+        .await;
+    c.pin("GET versions", &r, 200, "items:array,items[].bucket:string,items[].checksum:string,items[].created_at:number,items[].delete_marker:bool,items[].file_id:string,items[].id:string,items[].key:string,items[].metadata:object,items[].mime:string,items[].size:number,items[].version_id:string");
+    let r = c.get("/buckets/docs/versions", Some(admin)).await;
+    c.pin(
+        "GET versions (no key)",
+        &r,
+        400,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .json(
+            "POST",
+            "/buckets/docs/restore",
+            Some(admin),
+            serde_json::json!({"key": "a/b.txt", "version": first}),
+        )
+        .await;
+    c.pin("POST restore", &r, 200, "object:object,object.bucket:string,object.checksum:string,object.created_at:number,object.delete_marker:bool,object.file_id:string,object.filename:string,object.id:string,object.key:string,object.metadata:object,object.mime:string,object.size:number,object.version_id:string");
+    let r = c
+        .json(
+            "POST",
+            "/buckets/docs/restore",
+            Some(admin),
+            serde_json::json!({"key": "a/b.txt", "version": "nope"}),
+        )
+        .await;
+    c.pin(
+        "POST restore (missing version)",
+        &r,
+        404,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .call(
+            "DELETE",
+            "/buckets/docs/objects/a/b.txt",
+            Some(admin),
+            None,
+            vec![],
+            &[],
+        )
+        .await;
+    c.pin("DELETE object", &r, 204, "");
+    let r = c
+        .call(
+            "DELETE",
+            "/buckets/docs/objects/a/b.txt",
+            Some(admin),
+            None,
+            vec![],
+            &[],
+        )
+        .await;
+    c.pin(
+        "DELETE object (again)",
+        &r,
+        404,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .call("DELETE", "/buckets/docs", Some(admin), None, vec![], &[])
+        .await;
+    c.pin(
+        "DELETE /buckets/{name} (not empty)",
+        &r,
+        409,
+        "error:object,error.code:string,error.message:string",
+    );
+    let vs = serde_json::from_slice::<Value>(
+        &c.get("/buckets/docs/versions?key=a/b.txt", Some(admin))
+            .await
+            .body,
+    )
+    .unwrap();
+    for v in vs["items"].as_array().unwrap() {
+        let id = v["version_id"].as_str().unwrap();
+        let r = c
+            .call(
+                "DELETE",
+                &format!("/buckets/docs/objects/a/b.txt?version={id}"),
+                Some(admin),
+                None,
+                vec![],
+                &[],
+            )
+            .await;
+        c.pin("DELETE object (version)", &r, 204, "");
+    }
+    let r = c
+        .call("DELETE", "/buckets/docs", Some(admin), None, vec![], &[])
+        .await;
+    c.pin("DELETE /buckets/{name}", &r, 204, "");
+}

@@ -6,6 +6,7 @@ mod authn;
 mod error;
 mod files;
 pub mod oauth;
+mod objects;
 mod query;
 mod records;
 mod ui;
@@ -311,6 +312,23 @@ pub fn router(state: AppState) -> Router {
             get(records::get).delete(records::delete),
         )
         .route("/files/{collection}/{id}/{field}", get(files::download))
+        .route(
+            "/buckets",
+            get(objects::list_buckets).post(objects::create_bucket),
+        )
+        .route(
+            "/buckets/{name}",
+            get(objects::get_bucket)
+                .patch(objects::update_bucket)
+                .delete(objects::delete_bucket),
+        )
+        .route("/buckets/{name}/objects", get(objects::list_objects))
+        .route("/buckets/{name}/versions", get(objects::list_versions))
+        .route("/buckets/{name}/restore", post(objects::restore_version))
+        .route(
+            "/buckets/{name}/objects/{*key}",
+            get(objects::get_object).delete(objects::delete_object),
+        )
         .route("/keys", get(admin::list_keys).post(admin::create_key))
         .route("/keys/{id}", axum::routing::delete(admin::revoke_key))
         .route("/users", get(admin::list_users).post(admin::create_user))
@@ -339,6 +357,11 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/collections/{name}/records/{id}",
             axum::routing::patch(records::update),
+        )
+        // an object is the raw request body, streamed: no size cap here, the upload limit is enforced as bytes arrive
+        .route(
+            "/buckets/{name}/objects/{*key}",
+            axum::routing::put(objects::put_object),
         )
         .layer(DefaultBodyLimit::disable());
 
