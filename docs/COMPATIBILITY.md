@@ -11,7 +11,7 @@ PowerDB is pre-1.0. The `0.x` versions may change the HTTP API and the on-disk l
 - `/api/v1` is the current API: collections, records, files, auth, keys, users, stats, maintenance.
 - New features are added as **new routes or new optional fields**. An existing route, field or status code does not change meaning inside `v1`.
 - A change that cannot be made that way goes in `/api/v2`. `v1` keeps working for at least two minor releases after `v2` ships, the changelog says which routes are deprecated, and the SDK supports both.
-- Before any `v1` route is removed, a compatibility test must exist for it today. **That suite does not exist yet** (the API tests cover behaviour, but not as a frozen contract). Writing it is the first roadmap item, because every later change is checked against it.
+- The contract is frozen in `engine/tests/contract.rs`: every route is driven once and its status code and the names and types of its answer's fields (one nesting level deep) are pinned. Removing or renaming a field, changing a type or a status code fails that test; adding a field does not. Both kinds of break were tried and caught. It does not pin field *values*, request validation details or error message wording.
 
 ## SDK
 
@@ -23,7 +23,7 @@ PowerDB is pre-1.0. The `0.x` versions may change the HTTP API and the on-disk l
 - **Forward:** a binary refuses a directory from a newer layout and touches nothing.
 - **Backward (upgrade):** a binary upgrades an older layout in place, step by step, after copying `meta/` to `pre-migration-v<N>/`. The blob log is never rewritten by a migration.
 - **Downgrade:** not supported once an upgrade step has run. Going back means restoring a backup taken before the upgrade, or the `pre-migration-v<N>/` copy. This will be stated in the release notes of any release that changes the layout.
-- A migration must be tested on a directory built by the **previous release's binary**, not only on a fixture produced by the current one. No such test exists yet because there has been no migration.
+- A migration must be tested on a directory built by the **previous release's binary**, not only on a fixture produced by the current one. `tools/upgrade-test.py` does this in CI against the latest published release (records, duplicate and near-duplicate files, an encrypted collection, a delete, a restart). Because no layout change has happened yet, it so far proves only that same-layout upgrades are safe; the first migration must extend it.
 
 ## Backups
 

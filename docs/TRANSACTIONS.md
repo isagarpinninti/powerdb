@@ -61,4 +61,4 @@ Each is a sentence a test must be able to falsify.
 - Every stored chunk matches its key when hashed.
 - After any single injected failure, `powerdb check` passes and every acknowledged write is present.
 
-The first, third, fifth and seventh are partly covered by existing tests (`storage.rs`, `crash.rs`, `ops.rs`). The failure-injection coverage is the gap.
+All seven are now exercised: `model.rs` (random operations against a model, with `verify` after each step), `failpoints.rs` (a crash at 11 named points, then reopen and check), `crash.rs` (kill -9 under load) and `storage.rs`. Still not covered: power loss and a corrupt journal.

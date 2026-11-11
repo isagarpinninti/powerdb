@@ -18,15 +18,15 @@ This is the plan for the product brief (a general-purpose database with native o
 
 ## Phases
 
-### Phase 0: safety net (about 1 to 2 weeks)
+### Phase 0: safety net (about 1 to 2 weeks) — done
 
-No new features. Make later work safe.
+No new features. Make later work safe. Status: all five items below exist and run in CI. The model test found a data-loss bug in file garbage collection on its first run (fixed; see the changelog), and each new test was shown to fail when the thing it guards is broken.
 
 - Freeze the `/api/v1` contract: a test suite that records each route's request, response and status for the documented behaviour, run in CI.
 - A migration test that builds a database with the **previous release's binary** and opens it with the current one.
 - Failure-injection harness: named points in the commit and compaction paths where a test can stop the process (before and after log write, log fsync, batch, journal fsync, each compaction step), then run recovery and `powerdb check`.
 - Model-based test for reference counting: random create, update, delete, GC against a simple in-memory model, asserting the invariants in [TRANSACTIONS.md](TRANSACTIONS.md).
-- Record the invariants as executable checks inside `powerdb check`.
+- Record the invariants as executable checks inside `powerdb check`. (`powerdb check` already recomputes reference counts and verifies files, manifests and chunks; the model and failure-injection tests apply it after every step and every crash.)
 
 Exit: all invariant tests pass; contract suite in CI.
 
