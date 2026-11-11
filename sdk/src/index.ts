@@ -76,6 +76,8 @@ export class PowerDB {
   private token: string | undefined;
   readonly auth: Auth;
   readonly admin: Admin;
+  /** Buckets and the objects (files) in them: `db.buckets.create('docs')`, `db.bucket('docs').put('a/b.pdf', bytes)`. */
+  readonly buckets: Buckets;
 
   /** `key` is an API key (`pdb_live_...`) or a session token from `auth.login`. */
   constructor(baseUrl: string, key?: string) {
@@ -83,6 +85,12 @@ export class PowerDB {
     this.token = key;
     this.auth = new Auth(this);
     this.admin = new Admin(this);
+    this.buckets = new Buckets(this);
+  }
+
+  /** A bucket to read and write objects in. It does not check that the bucket exists until you use it. */
+  bucket(name: string): BucketHandle {
+    return new BucketHandle(this, name);
   }
 
   setToken(token: string | undefined): void {
@@ -119,6 +127,19 @@ export class PowerDB {
       payload = JSON.stringify(body);
     }
     const res = await fetch(this.baseUrl + path, { method, headers, body: payload });
+    if (!res.ok) throw await toError(res);
+    return res;
+  }
+
+  /** @internal A request with a body of the caller's own (raw bytes, a stream) and headers. */
+  async raw(
+    method: string,
+    path: string,
+    init: { headers?: Record<string, string>; body?: BodyInit; duplex?: 'half' } = {},
+  ): Promise<Response> {
+    const headers: Record<string, string> = { ...(init.headers ?? {}) };
+    if (this.token) headers['authorization'] = `Bearer ${this.token}`;
+    const res = await fetch(this.baseUrl + path, { method, headers, body: init.body, ...(init.duplex ? { duplex: init.duplex } : {}) } as RequestInit);
     if (!res.ok) throw await toError(res);
     return res;
   }
@@ -432,5 +453,191 @@ export class Query<T extends Fields = Fields> {
     } finally {
       this.lim = was;
     }
+  }
+}
+
+
+// ---- buckets and objects ----
+
+export interface BucketInfo {
+  name: string;
+  /** Every put is kept as a version; a delete hides the key and keeps the data. */
+  versioning: boolean;
+  /** The bucket's file data is encrypted at rest. */
+  encrypt: boolean;
+  created_at: number;
+}
+
+/** One version of an object. A delete marker has no file (`delete_marker` is true and `size` is 0). */
+export interface ObjectInfo {
+  /** Names the object across its versions. */
+  id: string;
+  bucket: string;
+  key: string;
+  version_id: string;
+  delete_marker: boolean;
+  size: number;
+  mime: string;
+  filename?: string;
+  /** BLAKE3 of the content, hex. */
+  checksum: string;
+  created_at: number;
+  metadata: Record<string, string>;
+}
+
+export interface PutOptions {
+  /** The content type. Default: `application/octet-stream`. The server refuses a file whose bytes contradict it (a program called image/png). */
+  type?: string;
+  /** The name a browser should save it as. */
+  filename?: string;
+  /** Custom metadata: names of letters, digits, `_`, `.`, `-`; at most 32 entries. */
+  metadata?: Record<string, string>;
+}
+
+export interface ReadOptions {
+  /** A specific version instead of the newest. */
+  version?: string;
+  /** Only these bytes, inclusive (`{ start: 0, end: 1023 }` is the first KiB). */
+  range?: { start: number; end?: number };
+}
+
+export interface ListOptions {
+  prefix?: string;
+  /** The `next` of the previous page. */
+  after?: string;
+  limit?: number;
+}
+
+export interface ObjectPage {
+  items: ObjectInfo[];
+  /** Pass as `after` for the next page; absent on the last. */
+  next?: string;
+  limit: number;
+}
+
+const encKey = (key: string): string => key.split('/').map(encodeURIComponent).join('/');
+
+class Buckets {
+  constructor(private readonly db: PowerDB) {}
+
+  async list(): Promise<BucketInfo[]> {
+    return (await this.db.json<{ items: BucketInfo[] }>('GET', '/api/v1/buckets')).items;
+  }
+
+  async create(name: string, opts: { versioning?: boolean; encrypt?: boolean } = {}): Promise<BucketInfo> {
+    return (await this.db.json<{ bucket: BucketInfo }>('POST', '/api/v1/buckets', { name, ...opts })).bucket;
+  }
+
+  async get(name: string): Promise<BucketInfo> {
+    return (await this.db.json<{ bucket: BucketInfo }>('GET', `/api/v1/buckets/${encodeURIComponent(name)}`)).bucket;
+  }
+
+  /** Turns versioning on. It cannot be turned off. */
+  async enableVersioning(name: string): Promise<BucketInfo> {
+    return (await this.db.json<{ bucket: BucketInfo }>('PATCH', `/api/v1/buckets/${encodeURIComponent(name)}`, { versioning: true })).bucket;
+  }
+
+  /** Deletes an empty bucket (a bucket that holds any version of any key is refused). */
+  async delete(name: string): Promise<void> {
+    await this.db.request('DELETE', `/api/v1/buckets/${encodeURIComponent(name)}`);
+  }
+}
+
+export class BucketHandle {
+  constructor(
+    private readonly db: PowerDB,
+    readonly name: string,
+  ) {}
+
+  private path(key: string): string {
+    return `/api/v1/buckets/${encodeURIComponent(this.name)}/objects/${encKey(key)}`;
+  }
+
+  /**
+   * Stores `body` as the object `key`. A string, bytes, a Blob or a stream (a stream is sent without being held in memory). In a bucket
+   * without versioning this replaces the object; with versioning it adds a version.
+   */
+  async put(key: string, body: string | Uint8Array | ArrayBuffer | Blob | ReadableStream<Uint8Array>, opts: PutOptions = {}): Promise<ObjectInfo> {
+    const headers: Record<string, string> = { 'content-type': opts.type ?? 'application/octet-stream' };
+    for (const [k, v] of Object.entries(opts.metadata ?? {})) headers[`x-powerdb-meta-${k}`] = v;
+    const isStream = typeof ReadableStream !== 'undefined' && body instanceof ReadableStream;
+    const q = opts.filename ? `?filename=${encodeURIComponent(opts.filename)}` : '';
+    const res = await this.db.raw('PUT', this.path(key) + q, {
+      headers,
+      body: body as BodyInit,
+      ...(isStream ? { duplex: 'half' as const } : {}),
+    });
+    return ((await res.json()) as { object: ObjectInfo }).object;
+  }
+
+  /** The raw response, for streaming a large object (`res.body`) or reading headers. Use `download` for the bytes. */
+  async response(key: string, opts: ReadOptions = {}): Promise<Response> {
+    const headers: Record<string, string> = {};
+    if (opts.range) headers['range'] = `bytes=${opts.range.start}-${opts.range.end ?? ''}`;
+    const q = opts.version ? `?version=${encodeURIComponent(opts.version)}` : '';
+    return this.db.raw('GET', this.path(key) + q, { headers });
+  }
+
+  /** The object's bytes (or the requested range of them). */
+  async download(key: string, opts: ReadOptions = {}): Promise<Uint8Array> {
+    return new Uint8Array(await (await this.response(key, opts)).arrayBuffer());
+  }
+
+  /** What is stored under `key` without downloading it. */
+  async head(key: string, opts: { version?: string } = {}): Promise<{ size: number; type: string; checksum: string; versionId: string; metadata: Record<string, string> }> {
+    const q = opts.version ? `?version=${encodeURIComponent(opts.version)}` : '';
+    const res = await this.db.raw('HEAD', this.path(key) + q);
+    const metadata: Record<string, string> = {};
+    res.headers.forEach((v, k) => {
+      if (k.startsWith('x-powerdb-meta-')) metadata[k.slice('x-powerdb-meta-'.length)] = v;
+    });
+    return {
+      size: Number(res.headers.get('content-length') ?? 0),
+      type: res.headers.get('content-type') ?? '',
+      checksum: (res.headers.get('etag') ?? '').replace(/"/g, ''),
+      versionId: res.headers.get('x-powerdb-version-id') ?? '',
+      metadata,
+    };
+  }
+
+  /** Deletes `key` (in a versioned bucket this hides it); with `version`, removes that version for good. */
+  async delete(key: string, opts: { version?: string } = {}): Promise<void> {
+    const q = opts.version ? `?version=${encodeURIComponent(opts.version)}` : '';
+    await this.db.raw('DELETE', this.path(key) + q);
+  }
+
+  /** One page of the newest version of each key, in key order. */
+  async list(opts: ListOptions = {}): Promise<ObjectPage> {
+    const p = new URLSearchParams();
+    if (opts.prefix) p.set('prefix', opts.prefix);
+    if (opts.after) p.set('after', opts.after);
+    if (opts.limit) p.set('limit', String(opts.limit));
+    const q = p.toString();
+    const r = await this.db.json<{ items: ObjectInfo[]; next?: string | null; limit: number }>(
+      'GET',
+      `/api/v1/buckets/${encodeURIComponent(this.name)}/objects${q ? '?' + q : ''}`,
+    );
+    return { items: r.items, next: r.next ?? undefined, limit: r.limit };
+  }
+
+  /** Every object whose key starts with `prefix`, page by page. */
+  async *each(prefix = ''): AsyncGenerator<ObjectInfo> {
+    let after: string | undefined;
+    for (;;) {
+      const page = await this.list({ prefix, after, limit: 1000 });
+      yield* page.items;
+      if (!page.next) return;
+      after = page.next;
+    }
+  }
+
+  /** Every version of `key`, newest first, delete markers included. */
+  async versions(key: string): Promise<ObjectInfo[]> {
+    return (await this.db.json<{ items: ObjectInfo[] }>('GET', `/api/v1/buckets/${encodeURIComponent(this.name)}/versions?key=${encodeURIComponent(key)}`)).items;
+  }
+
+  /** Makes an old version the newest again (as a new version sharing its data). Only in a bucket with versioning. */
+  async restore(key: string, version: string): Promise<ObjectInfo> {
+    return (await this.db.json<{ object: ObjectInfo }>('POST', `/api/v1/buckets/${encodeURIComponent(this.name)}/restore`, { key, version })).object;
   }
 }

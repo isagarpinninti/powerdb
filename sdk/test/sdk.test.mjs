@@ -159,3 +159,103 @@ test('OAuth helpers build the sign-in URL and read the result from the fragment'
   assert.throws(() => db.auth.finishOAuth('#error=no_account'), (e) => e instanceof PowerDBError && /no_account/.test(e.message));
   assert.equal(db.auth.finishOAuth('#token=abc.def.ghi'), 'abc.def.ghi');
 });
+
+// ---- buckets and objects ----
+
+test('buckets: create, list, versioning, delete', async () => {
+  const b = await admin.buckets.create('sdk-docs');
+  assert.equal(b.name, 'sdk-docs');
+  assert.equal(b.versioning, false);
+  assert.ok((await admin.buckets.list()).some((x) => x.name === 'sdk-docs'));
+  assert.equal((await admin.buckets.get('sdk-docs')).name, 'sdk-docs');
+  await assert.rejects(admin.buckets.create('sdk-docs'), (e) => e instanceof PowerDBError && e.status === 409);
+  await assert.rejects(admin.buckets.create('Bad Name'), (e) => e instanceof PowerDBError && e.status === 400);
+  assert.equal((await admin.buckets.enableVersioning('sdk-docs')).versioning, true);
+  await admin.buckets.delete('sdk-docs');
+  await assert.rejects(admin.buckets.get('sdk-docs'), (e) => e.status === 404);
+});
+
+test('objects: put, head, download, range, list, delete', async () => {
+  await admin.buckets.create('sdk-files');
+  const files = admin.bucket('sdk-files');
+  const body = randomBytes(2_500_000);
+  const info = await files.put('reports/2026/q1.bin', body, { filename: 'Q1 report.bin', metadata: { customer: 'acme' } });
+  assert.equal(info.size, body.length);
+  assert.equal(info.key, 'reports/2026/q1.bin');
+  assert.equal(info.metadata.customer, 'acme');
+
+  const got = await files.download('reports/2026/q1.bin');
+  assert.ok(Buffer.from(got).equals(body), 'the download is byte for byte the upload');
+  const part = await files.download('reports/2026/q1.bin', { range: { start: 1000, end: 1999 } });
+  assert.ok(Buffer.from(part).equals(body.subarray(1000, 2000)));
+
+  const head = await files.head('reports/2026/q1.bin');
+  assert.equal(head.size, body.length);
+  assert.equal(head.checksum, info.checksum);
+  assert.equal(head.metadata.customer, 'acme');
+
+  // keys with spaces, unicode and slashes
+  await files.put('weird name/日本 & more.txt', 'hello', { type: 'text/plain' });
+  assert.equal(new TextDecoder().decode(await files.download('weird name/日本 & more.txt')), 'hello');
+
+  const keys = [];
+  for await (const o of files.each()) keys.push(o.key);
+  assert.deepEqual(keys, [...keys].sort());
+  assert.equal(keys.length, 2);
+  assert.equal((await files.list({ prefix: 'reports/' })).items.length, 1);
+
+  await files.delete('reports/2026/q1.bin');
+  await assert.rejects(files.download('reports/2026/q1.bin'), (e) => e instanceof PowerDBError && e.status === 404);
+});
+
+test('objects: a stream is uploaded without being held in memory', async () => {
+  await admin.buckets.create('sdk-stream');
+  const files = admin.bucket('sdk-stream');
+  const sent = [];
+  const src = [randomBytes(300_000), randomBytes(300_000), randomBytes(100_000)];
+  const s2 = new ReadableStream({
+    pull(c) {
+      const n = src.shift();
+      if (n) { sent.push(n); c.enqueue(new Uint8Array(n)); } else c.close();
+    },
+  });
+  const info = await files.put('streamed.bin', s2);
+  assert.equal(info.size, 700_000);
+  assert.ok(Buffer.from(await files.download('streamed.bin')).equals(Buffer.concat(sent)));
+});
+
+test('objects: versions, delete markers and restore', async () => {
+  await admin.buckets.create('sdk-versions', { versioning: true });
+  const v = admin.bucket('sdk-versions');
+  const one = await v.put('doc.txt', 'one', { type: 'text/plain' });
+  const two = await v.put('doc.txt', 'two', { type: 'text/plain' });
+  assert.equal(one.id, two.id);
+  assert.deepEqual((await v.versions('doc.txt')).map((x) => x.version_id), [two.version_id, one.version_id]);
+  assert.equal(new TextDecoder().decode(await v.download('doc.txt', { version: one.version_id })), 'one');
+  await v.delete('doc.txt');
+  await assert.rejects(v.download('doc.txt'), (e) => e.status === 404);
+  assert.equal((await v.versions('doc.txt')).length, 3);
+  await v.restore('doc.txt', one.version_id);
+  assert.equal(new TextDecoder().decode(await v.download('doc.txt')), 'one');
+});
+
+test('objects: the server refuses a program called an image', async () => {
+  await admin.buckets.create('sdk-checks');
+  const exe = Buffer.concat([Buffer.from('MZ\x90\x00\x03\x00\x00\x00'), randomBytes(2000)]);
+  await assert.rejects(admin.bucket('sdk-checks').put('photo.png', exe, { type: 'image/png' }), (e) => e instanceof PowerDBError && e.status === 400);
+  await assert.rejects(admin.bucket('sdk-checks').download('photo.png'), (e) => e.status === 404, 'nothing was stored');
+});
+
+test('objects: an ordinary user and an anonymous caller are refused', async () => {
+  const anon = new PowerDB(url);
+  await assert.rejects(anon.buckets.list(), (e) => e instanceof PowerDBError && e.status === 401);
+  const r = await fetch(url + '/api/v1/users', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${(await admin.auth.login('root@example.com', 'correct horse battery')).token}` },
+    body: JSON.stringify({ email: 'plain@example.com', password: 'another long passphrase' }),
+  });
+  assert.equal(r.status, 201);
+  const user = new PowerDB(url);
+  await user.auth.login('plain@example.com', 'another long passphrase');
+  await assert.rejects(user.buckets.list(), (e) => e instanceof PowerDBError && e.status === 403);
+});
