@@ -20,6 +20,27 @@ jobs:
       # crash the process at every named point in the commit, collection and compaction paths, then check recovery (see engine/src/failpoint.rs)
       - run: cargo clippy --locked --release -p powerdb --all-targets --features failpoints -- -D warnings
       - run: cargo test --locked --release -p powerdb --features failpoints --test failpoints
+  # Data written by the latest published release must open, check clean and read back identical on this build.
+  upgrade:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: macos-15, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with: { toolchain: stable }
+      - run: cargo build --locked --release
+      - name: Download the latest release (the "old" side)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          mkdir -p "$RUNNER_TEMP/old"
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern "powerdb-${{ matrix.target }}.tar.gz" --dir "$RUNNER_TEMP/old"
+          tar xzf "$RUNNER_TEMP/old"/powerdb-*.tar.gz -C "$RUNNER_TEMP/old"
+      - run: python3 tools/upgrade-test.py "$RUNNER_TEMP/old/powerdb" target/release/powerdb "$RUNNER_TEMP/upgrade"
   sdk-and-dashboard:
     strategy:
       fail-fast: false
