@@ -145,6 +145,7 @@ cd desktop && npm ci && npm run sidecar && npx tauri build    # the desktop app
 - [Operating PowerDB](docs/OPERATIONS.md): TLS, backups, upgrades, monitoring
 - [Hardening a deployment](docs/HARDENING.md): a checklist for running it where people depend on it
 - [Design](docs/DESIGN.md): how it is built, and what it does not do
+- [Architecture](docs/ARCHITECTURE.md), [Roadmap](docs/ROADMAP.md), [Storage format](docs/STORAGE_FORMAT.md), [Transactions](docs/TRANSACTIONS.md), [Compatibility](docs/COMPATIBILITY.md): an audit of what exists today, and the plan toward typed tables, standalone objects and SQL
 - [Security review](docs/SECURITY-REVIEW.md), [Changelog](CHANGELOG.md), [Making a release](RELEASING.md), [Third-party licences](THIRD_PARTY_NOTICES.md)
 
 ## License
