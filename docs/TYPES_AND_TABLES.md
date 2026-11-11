@@ -1,6 +1,12 @@
 # Design: types, tables, constraints and indexes (Phase 2)
 
-> **Status: slices 2a and 2b are built.** 2b is `engine/src/types/schema.rs` (tables, columns with stable ids, schema versions, the changes of decision 4 and reading an old row under a new schema) with 11 tests, including a model test of random schema changes against rows that were written under older schemas and never rewritten. Its first version of the "dropped column ids are never reused" test missed the case the model found (dropping the column with the highest id); both now cover it. Persisting the catalog comes with slice 2c, because it shares the layout change.
+> **Status: slices 2a, 2b and 2c are built.** 2c (`engine/src/storage/tables.rs`, layout 3) stores typed tables: create, alter, drop, and insert, read, update, delete and scan rows by primary key, with `powerdb check` verifying them, 12 tests (behaviour, a random row-and-schema model test with restarts, damaged-data detection) and the crash tests extended to table writes. It is engine-level: no HTTP routes, CLI or dashboard yet (slice 2g).
+>
+> **A change from the design below.** Decision 4 says existing collections become tables, which means rewriting every record. 2c does not do that: **typed tables live beside collections**, in new keyspaces; collections, records and the `/api/v1` collection routes are untouched, and the layout migration rewrites nothing, so it is cheap to reason about and easy to back out. Unifying the two (a collection as a view over a table) is deferred until typed tables have earned trust. Cost: for a while there are two record models, and constraints (2d), indexes (2e) and file columns (2f) apply to tables only.
+>
+> **Two rules the row format forces.** A null is an *absent* value, and a column's default fills in for an absent value. So **a column with a default cannot hold an explicit null** (it would read back as the default), and an update that tries is refused with a message saying so. And **a primary key is fixed once a table is stored** (its columns cannot be dropped, made nullable or retyped, not even widened, because every row's key would change); a key column can be renamed.
+>
+> **Also built earlier:** slices 2a and 2b. 2b is `engine/src/types/schema.rs` (tables, columns with stable ids, schema versions, the changes of decision 4 and reading an old row under a new schema) with 11 tests, including a model test of random schema changes against rows that were written under older schemas and never rewritten. Its first version of the "dropped column ids are never reused" test missed the case the model found (dropping the column with the highest id); both now cover it. Persisting the catalog comes with slice 2c, because it shares the layout change.
 >
 > **Slice 2a is built** (`engine/src/types/`): the type system, the row codec and the key codec, as a library that changes nothing on disk.
 > It has 16 tests (seeded random round trips for every type, order of keys against an independent oracle, 15 malformed-row cases, mutation fuzzing
@@ -109,7 +115,7 @@ B-tree style, kept as ordinary entries in the same LSM: `index id, encoded key c
 |---|---|---|
 | 2a | The type system and the row and key codecs, as a library with no storage change | Property tests: encode/decode identity for every type; key order equals value order; fuzzing the decoder with a huge-allocation guard. Size compared with JSON on the demo data. |
 | 2b | The catalog: tables, columns, schema versions, `ALTER` | Model test of random schema changes against old rows; every cheap change shown not to rewrite data. |
-| 2c | Typed rows in storage; collections as an adapter; layout 3 migration | The contract test unchanged; upgrade test from a 0.4.0 data folder; `check` extended. |
+| 2c | Typed tables in storage beside collections; layout 3 | Done: the upgrade test from 0.4.0 data (with objects) and from 0.3.1; `check` extended; model and crash tests. The collection-adapter idea is deferred (see the status note). |
 | 2d | Constraints and foreign keys in the commit | Model test with every constraint kind and random operations; crash points around the new writes. |
 | 2e | Secondary indexes | `check` proves them equal to the rows after every step of the model test. |
 | 2f | `FILE` and `FILE[]` columns | Reference counting through the model test; deleting a row frees its files; an object cannot be removed while a row refers to it (or the policy chosen is stated). |

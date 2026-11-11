@@ -8,6 +8,7 @@ pub mod model;
 pub mod objects;
 pub mod segment;
 pub mod snapshot;
+pub mod tables;
 pub mod verify;
 
 use crate::error::{Error, Result};
@@ -94,6 +95,10 @@ pub(crate) struct Spaces {
     pub buckets: Keyspace,
     /// Object versions, keyed `bucket 0x00 key 0x00 version id` (layout 2).
     pub objects: Keyspace,
+    /// Typed table definitions, and the next table id (layout 3).
+    pub tables: Keyspace,
+    /// Typed rows, keyed `table id` + primary key (layout 3).
+    pub rows: Keyspace,
 }
 
 pub(crate) struct Inner {
@@ -286,7 +291,7 @@ fn check_meta_files(meta: &Path) -> Result<()> {
 }
 
 /// Version of the on-disk layout. Bump it, and add an entry to `format::MIGRATIONS`, whenever a change would make older data unreadable.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
@@ -334,6 +339,8 @@ impl Db {
             seg_dead: store.keyspace("seg_dead", o)?,
             buckets: store.keyspace("buckets", o)?,
             objects: store.keyspace("objects", o)?,
+            tables: store.keyspace("tables", o)?,
+            rows: store.keyspace("rows", o)?,
         };
         let log = SegmentLog::open(&path.join("blobs"), opts.segment_bytes)?;
         let next_seq = match ks.gc_queue.last_key_value() {

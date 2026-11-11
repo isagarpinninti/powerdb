@@ -109,6 +109,27 @@ fn workload_child() {
         created_at: 0,
     })
     .unwrap();
+    {
+        use powerdb::types::Type;
+        use powerdb::types::schema::{Change, TableDef};
+        let mut t = TableDef::new("tt").unwrap();
+        for (n, ty) in [("k", Type::I64), ("v", Type::Text)] {
+            t = t
+                .apply(
+                    &Change::AddColumn {
+                        name: n.into(),
+                        ty,
+                        nullable: false,
+                        default: None,
+                    },
+                    true,
+                )
+                .unwrap()
+                .0;
+        }
+        t.set_primary_key(&["k"]).unwrap();
+        db.create_table(t).unwrap();
+    }
     let mut out = std::io::stdout();
     let mut say = |line: String| {
         writeln!(out, "{line}").unwrap();
@@ -141,6 +162,28 @@ fn workload_child() {
             )
             .unwrap();
             say(format!("ACK update {id} {} {}", nc.0, nc.1));
+        }
+        // a typed table row: inserted, then changed, then deleted a few iterations later
+        {
+            use powerdb::types::Value as V;
+            let k = i as i64;
+            say(format!("TRY trow {k} a"));
+            db.insert_row("tt", &[("k", V::I64(k)), ("v", V::Text("a".into()))])
+                .unwrap();
+            say(format!("ACK trow {k} a"));
+            if i % 3 == 2 {
+                let j = k - 1;
+                say(format!("TRY tupd {j} b"));
+                db.update_row("tt", &[V::I64(j)], &[("v", Some(V::Text("b".into())))])
+                    .unwrap();
+                say(format!("ACK tupd {j} b"));
+            }
+            if i % 5 == 4 {
+                let j = k - 3;
+                say(format!("TRY tdel {j}"));
+                db.delete_row("tt", &[V::I64(j)]).unwrap();
+                say(format!("ACK tdel {j}"));
+            }
         }
         // an object: the key is reused, so puts replace and deletes release
         let key = format!("k{}", i % 6);
@@ -178,6 +221,10 @@ struct Acked {
     maybe_deleted: HashSet<String>,
     /// objects: the contents a key may hold, and whether it may be absent
     objects: HashMap<String, (Vec<Content>, bool)>,
+    /// table rows: the values a key may hold, and whether it may be absent
+    trows: HashMap<i64, (Vec<String>, bool)>,
+    /// keys whose deletion was acknowledged: they must be gone
+    tdeleted: HashSet<i64>,
 }
 
 fn parse(lines: &[String]) -> Acked {
@@ -228,6 +275,37 @@ fn parse(lines: &[String]) -> Acked {
             ["ACK", "delobj", key] => {
                 a.objects.remove(*key);
             }
+            ["TRY", "trow", k, v] => {
+                if let Ok(k) = k.parse::<i64>() {
+                    a.trows.insert(k, (vec![v.to_string()], true));
+                }
+            }
+            ["ACK", "trow", k, v] => {
+                if let Ok(k) = k.parse::<i64>() {
+                    a.trows.insert(k, (vec![v.to_string()], false));
+                }
+            }
+            ["TRY", "tupd", k, v] => {
+                if let Some(e) = k.parse::<i64>().ok().and_then(|k| a.trows.get_mut(&k)) {
+                    e.0.push(v.to_string());
+                }
+            }
+            ["ACK", "tupd", k, v] => {
+                if let Some(e) = k.parse::<i64>().ok().and_then(|k| a.trows.get_mut(&k)) {
+                    *e = (vec![v.to_string()], false);
+                }
+            }
+            ["TRY", "tdel", k] => {
+                if let Some(e) = k.parse::<i64>().ok().and_then(|k| a.trows.get_mut(&k)) {
+                    e.1 = true;
+                }
+            }
+            ["ACK", "tdel", k] => {
+                if let Ok(k) = k.parse::<i64>() {
+                    a.trows.remove(&k);
+                    a.tdeleted.insert(k);
+                }
+            }
             _ => {} // a line cut off by the crash
         }
     }
@@ -251,6 +329,31 @@ fn check_acked(db: &Db, a: &Acked, ctx: &str) {
                 );
             }
         }
+    }
+}
+
+fn check_rows(db: &Db, a: &Acked, ctx: &str) {
+    use powerdb::types::Value as V;
+    for (k, (allowed, absent_ok)) in &a.trows {
+        match db.get_row("tt", &[V::I64(*k)]).unwrap() {
+            None => assert!(*absent_ok, "{ctx}: acknowledged table row {k} is gone"),
+            Some(row) => {
+                let got = row
+                    .iter()
+                    .find(|(n, _)| n == "v")
+                    .and_then(|(_, v)| v.clone());
+                assert!(
+                    allowed.iter().any(|s| got == Some(V::Text(s.clone()))),
+                    "{ctx}: table row {k} holds {got:?}, which is none of {allowed:?}"
+                );
+            }
+        }
+    }
+    for k in &a.tdeleted {
+        assert!(
+            db.get_row("tt", &[V::I64(*k)]).unwrap().is_none(),
+            "{ctx}: table row {k} came back after its deletion was acknowledged"
+        );
     }
 }
 
@@ -312,6 +415,7 @@ fn crash_at(point: &str, nth: u64) {
     // 2. nothing acknowledged was lost
     check_acked(&db, &acked, &ctx);
     check_objects(&db, &acked, &ctx);
+    check_rows(&db, &acked, &ctx);
     // 3. it still works, and stays consistent through collection and compaction
     let rec = db
         .create("docs", fields(999), vec![("a".into(), stage(&db, (9, 2)))])
@@ -326,6 +430,7 @@ fn crash_at(point: &str, nth: u64) {
     );
     check_acked(&db, &acked, &format!("{ctx} (after collection)"));
     check_objects(&db, &acked, &format!("{ctx} (after collection)"));
+    check_rows(&db, &acked, &format!("{ctx} (after collection)"));
     let got = db
         .read_file(&from_hex_32(&db.get("docs", &rec.id).unwrap().unwrap().files["a"].id).unwrap())
         .unwrap();

@@ -1,6 +1,6 @@
-# On-disk format (layout 2)
+# On-disk format (layout 3)
 
-This describes the current format. Layout 1 (0.1 to 0.3.1) is the same without the `buckets` and `objects` keyspaces; layout 2 (0.4.0) adds them. Layout number: **2** (`FORMAT_VERSION` in `engine/src/storage/mod.rs`).
+This describes the current format. Layout 1 (0.1 to 0.3.1) is the same without the `buckets` and `objects` keyspaces; layout 2 (0.4.0) adds them; layout 3 (unreleased) adds typed tables (`tables`, `rows`). Layout number: **3** (`FORMAT_VERSION` in `engine/src/storage/mod.rs`).
 
 ## Directory
 
@@ -41,6 +41,8 @@ All are fjall keyspaces under `meta/`. A commit writes across them in one atomic
 | `chunk_refs` | chunk key | `u64` LE: number of manifests that contain this chunk |
 | `gc_queue` | manifest id | a dead file waiting to have its chunks released |
 | `seg_dead` | segment number | bytes of dead entries in that segment, to choose compaction candidates |
+| `tables` (layout 3) | table name; and the reserved key `[0x00]` | The table definition (JSON, `TableDef::to_bytes`: stable table id, column ids, types, defaults, primary key, schema version); the reserved key holds the next table id (`u32`, big-endian). Table names start with a lowercase letter, so none can be `[0x00]`. |
+| `rows` (layout 3) | table id (`u32` big-endian) + the primary key's key encoding ([TYPES_AND_TABLES.md](TYPES_AND_TABLES.md)) | The row (`types::row`: version byte, then `(column id, type tag, value)` in ascending id order). A null column is absent. |
 | `buckets` (layout 2) | bucket name | JSON `BucketDef` (`name`, `versioning`, `encrypt`, `created_at`) |
 | `objects` (layout 2) | `bucket` + `0x00` + `key` + `0x00` + version id | JSON `ObjectMeta`: stable object id, version id, delete-marker flag, file id (the manifest id), size, MIME type, filename, BLAKE3 checksum of the content, created time, custom metadata |
 | `users`, `keys`, `sys` | (auth module) | users with Argon2id hashes, API key hashes and scopes, server secrets |
@@ -59,6 +61,7 @@ Record ids are time-ordered strings: a 48-bit millisecond clock, a counter and r
 | Layout | Versions | What changed |
 |---|---|---|
 | 1 | 0.1.0 to 0.3.1 | records, files, chunks, users, keys |
+| 3 | unreleased | adds `tables` and `rows` for typed tables. Nothing is rewritten and collections are untouched. Upgrade from 2: `meta/` is copied to `pre-migration-v2/`, the marker becomes 3. An older binary refuses a layout-3 directory. |
 | 2 | 0.4.0 | adds `buckets` and `objects`; a file's reference count also counts object versions. Upgrade from 1: `meta/` is copied to `pre-migration-v1/`, nothing is rewritten, the marker becomes 2. An older binary refuses a layout-2 directory. |
 
 ## Versioning and upgrades

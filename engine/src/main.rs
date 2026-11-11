@@ -817,10 +817,17 @@ fn check(data: PathBuf, quick: bool) -> i32 {
                     r.chunk_bytes_checked as f64 / 1048576.0
                 )
             };
-            println!(
-                "{} records, {} files, {} chunks{how}",
+            let mut what = format!(
+                "{} records, {} files, {} chunks",
                 r.records, r.files, r.chunks
             );
+            if r.objects > 0 {
+                what.push_str(&format!(", {} object versions", r.objects));
+            }
+            if r.tables > 0 || r.table_rows > 0 {
+                what.push_str(&format!(", {} tables with {} rows", r.tables, r.table_rows));
+            }
+            println!("{what}{how}");
             if r.problems.is_empty() {
                 println!("No problems found.");
                 0

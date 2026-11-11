@@ -123,6 +123,20 @@ def main():
     s, _ = call("DELETE", f"/collections/{victim[0]}/records/{victim[1]}", key)
     assert s in (200, 204), s
     del expected[victim]
+    # objects (0.4 and later): a versioned bucket with several versions and a delete marker. An older release has no such routes: skipped.
+    objects = {}
+    s, _ = js("POST", "/buckets", key, {"name": "archive", "versioning": True})
+    if s == 201:
+        v1, v2, other = blob(21, 700_000), blob(21, 700_000, tweak=5), blob(22, 90_000)
+        for k, data in [("legal/msa.pdf", v1), ("legal/msa.pdf", v2), ("notes.txt", other)]:
+            st, b = call("PUT", f"/buckets/archive/objects/{k}", key, data, {"content-type": "application/octet-stream"})
+            assert st == 200, (k, st, b[:200])
+        st, _ = call("PUT", "/buckets/archive/objects/gone.bin", key, blob(23, 5000), {"content-type": "application/octet-stream"})
+        assert st == 200
+        st, _ = call("DELETE", "/buckets/archive/objects/gone.bin", key)
+        assert st == 204
+        objects = {"legal/msa.pdf": sha(v2), "notes.txt": sha(other)}
+        print("  old release: wrote versioned objects")
     srv.stop()
     check(OLD, "old release")
 
@@ -139,6 +153,15 @@ def main():
         assert sha(body) == digest, f"{title}: the file differs after the upgrade"
     s, b = call("GET", f"/collections/docs/records/{victim[1]}", key)
     assert s == 404, f"the record deleted before the upgrade is back (status {s})"
+    for k, digest in objects.items():
+        st, body = call("GET", f"/buckets/archive/objects/{k}", key)
+        assert st == 200 and sha(body) == digest, f"object {k} differs after the upgrade (status {st})"
+    if objects:
+        st, body = call("GET", "/buckets/archive/versions?key=legal/msa.pdf", key)
+        assert st == 200 and len(json.loads(body)["items"]) == 2, "the versions of an object changed in the upgrade"
+        st, _ = call("GET", "/buckets/archive/objects/gone.bin", key)
+        assert st == 404, "an object deleted before the upgrade is back"
+        print(f"  new build: {len(objects)} objects and their versions read back identical")
     print(f"  new build: {len(expected)} records and files read back identical")
 
     # --- 3. write with the new build

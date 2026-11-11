@@ -28,11 +28,24 @@ fn v1_to_v2(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    from: 1,
-    describe: "adds buckets and objects (new, empty keyspaces)",
-    run: v1_to_v2,
-}];
+/// Layout 3 adds the `tables` and `rows` keyspaces for typed tables. Like layout 2 it adds empty keyspaces and rewrites nothing; collections and their
+/// records are untouched. The step exists so a layout-2 directory is copied aside first and an older binary refuses the result.
+fn v2_to_v3(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        from: 1,
+        describe: "adds buckets and objects (new, empty keyspaces)",
+        run: v1_to_v2,
+    },
+    Migration {
+        from: 2,
+        describe: "adds typed tables (new, empty keyspaces)",
+        run: v2_to_v3,
+    },
+];
 
 fn write_version(path: &Path, v: u32) -> Result<()> {
     let tmp = path.join("FORMAT.tmp");

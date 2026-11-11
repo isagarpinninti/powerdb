@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- **Typed tables in storage (layout 3), engine level.** Create, alter and drop tables; insert, read, update, delete and scan rows by primary key (single or composite); schema changes (add, drop, rename, widen, NOT NULL) apply to rows already stored without rewriting them; `powerdb check` verifies definitions and rows. A column with a default cannot be set to null, and a primary key cannot change once the table is stored (see docs/TYPES_AND_TABLES.md). No HTTP routes, CLI or dashboard yet. Collections are untouched.
+- **On-disk layout 3.** Adds the `tables` and `rows` keyspaces; nothing is rewritten. A layout-2 folder is copied to `pre-migration-v2/` on first open, and 0.4.x cannot open the result.
+- The upgrade test now also writes versioned objects with the old release and checks them after the upgrade.
 - Groundwork for typed tables: a type system with row and index-key codecs (`engine/src/types`), not yet used by storage. See docs/TYPES_AND_TABLES.md.
 - Table catalog logic (`engine/src/types/schema.rs`): columns with stable ids, schema versions, add, drop, rename and widen without rewriting rows, and reading a row written under an older schema. Library only; not yet used by storage.
 - JSON numbers with many digits now parse exactly (`serde_json`'s `float_roundtrip`). Before, a float with 17 significant digits could come back one bit different after being read.

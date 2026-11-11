@@ -737,9 +737,9 @@ fn a_directory_without_a_format_marker_is_adopted_as_format_1_and_upgraded() {
 }
 
 /// A layout-1 directory with real data (written before objects existed) opens, is upgraded in place, keeps every record and file, passes the
-/// integrity check, and can then hold objects. Layout 2 only adds empty keyspaces, so a directory written now and marked layout 1 is the same on disk.
+/// integrity check, and can then hold objects. Layouts 2 and 3 only add empty keyspaces, so a directory written now and marked layout 1 is the same on disk.
 #[test]
-fn a_layout_1_directory_with_data_upgrades_to_layout_2() {
+fn a_layout_1_directory_with_data_upgrades_through_to_the_current_layout() {
     let d = Dir::new();
     let (id, bytes) = {
         let db = open(&d);
@@ -757,7 +757,8 @@ fn a_layout_1_directory_with_data_upgrades_to_layout_2() {
     let db = open(&d);
     assert_eq!(
         std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
-        "2"
+        powerdb::storage::FORMAT_VERSION.to_string(),
+        "every step from 1 ran"
     );
     assert!(d.0.join("pre-migration-v1").join("meta").exists());
     let rec = db.get("invoices", &id).unwrap().unwrap();
@@ -785,6 +786,52 @@ fn a_layout_1_directory_with_data_upgrades_to_layout_2() {
     let r = db.verify(true).unwrap();
     assert!(r.problems.is_empty(), "{:?}", r.problems);
     assert_eq!(r.objects, 1);
+}
+
+/// A layout-2 directory (records, files, buckets and objects, no tables) upgrades to layout 3 with everything intact, and can then hold typed tables.
+#[test]
+fn a_layout_2_directory_with_objects_upgrades_to_layout_3() {
+    use powerdb::storage::objects::BucketDef;
+    let d = Dir::new();
+    let bytes = data(200_000, 9);
+    let rec_id = {
+        let db = open(&d);
+        db.create_bucket(BucketDef {
+            name: "files".into(),
+            versioning: true,
+            encrypt: false,
+            created_at: 0,
+        })
+        .unwrap();
+        let f = db
+            .stage_object("files", "text/plain", None, Cursor::new(bytes.clone()))
+            .unwrap();
+        db.put_object("files", "a.txt", f, Default::default())
+            .unwrap();
+        db.create(
+            "invoices",
+            fields("acme", 1),
+            vec![("document".into(), stage(&db, &bytes))],
+        )
+        .unwrap()
+        .id
+    };
+    std::fs::write(d.0.join("FORMAT"), "2\n").unwrap();
+    let db = open(&d);
+    assert_eq!(
+        std::fs::read_to_string(d.0.join("FORMAT")).unwrap().trim(),
+        "3"
+    );
+    assert!(d.0.join("pre-migration-v2").join("meta").exists());
+    let obj = db.get_object("files", "a.txt", None).unwrap();
+    assert_eq!(
+        db.read_file(&from_hex_32(&obj.file_id).unwrap()).unwrap(),
+        bytes
+    );
+    let rec = db.get("invoices", &rec_id).unwrap().unwrap();
+    assert_eq!(read(&db, &rec, "document"), bytes);
+    let r = db.verify(true).unwrap();
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
 }
 
 #[test]

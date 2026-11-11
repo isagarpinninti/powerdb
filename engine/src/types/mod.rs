@@ -168,6 +168,71 @@ impl Type {
         })
     }
 
+    /// The name a type has in a stored catalog and in the API (`int32`, `text`, `array<int32>`).
+    pub fn name(&self) -> String {
+        match self {
+            Type::Bool => "bool".into(),
+            Type::I8 => "int8".into(),
+            Type::I16 => "int16".into(),
+            Type::I32 => "int32".into(),
+            Type::I64 => "int64".into(),
+            Type::U8 => "uint8".into(),
+            Type::U16 => "uint16".into(),
+            Type::U32 => "uint32".into(),
+            Type::U64 => "uint64".into(),
+            Type::F32 => "float32".into(),
+            Type::F64 => "float64".into(),
+            Type::Decimal => "decimal".into(),
+            Type::Text => "text".into(),
+            Type::Uuid => "uuid".into(),
+            Type::Date => "date".into(),
+            Type::Time => "time".into(),
+            Type::Timestamp => "timestamp".into(),
+            Type::TimestampTz => "timestamptz".into(),
+            Type::Json => "json".into(),
+            Type::Binary => "binary".into(),
+            Type::Enum => "enum".into(),
+            Type::Array(t) => format!("array<{}>", t.name()),
+            Type::File => "file".into(),
+            Type::Number => "number".into(),
+        }
+    }
+
+    /// The inverse of `name`, for the types a table column may have today (no `enum`, `file` or the legacy `number`: those are not available in tables yet).
+    pub fn parse_column_type(s: &str) -> Option<Type> {
+        if let Some(inner) = s.strip_prefix("array<").and_then(|r| r.strip_suffix('>')) {
+            let t = Type::parse_column_type(inner)?;
+            return if matches!(t, Type::Array(_)) {
+                None
+            } else {
+                Some(Type::Array(Box::new(t)))
+            };
+        }
+        Some(match s {
+            "bool" => Type::Bool,
+            "int8" => Type::I8,
+            "int16" => Type::I16,
+            "int32" => Type::I32,
+            "int64" => Type::I64,
+            "uint8" => Type::U8,
+            "uint16" => Type::U16,
+            "uint32" => Type::U32,
+            "uint64" => Type::U64,
+            "float32" => Type::F32,
+            "float64" => Type::F64,
+            "decimal" => Type::Decimal,
+            "text" => Type::Text,
+            "uuid" => Type::Uuid,
+            "date" => Type::Date,
+            "time" => Type::Time,
+            "timestamp" => Type::Timestamp,
+            "timestamptz" => Type::TimestampTz,
+            "json" => Type::Json,
+            "binary" => Type::Binary,
+            _ => return None,
+        })
+    }
+
     /// Whether a value of this type can be part of an index key.
     pub fn indexable(&self) -> bool {
         !matches!(

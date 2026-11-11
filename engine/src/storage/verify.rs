@@ -13,6 +13,8 @@ use super::{
     u64_of,
 };
 use crate::error::{Error, Result};
+use crate::types::row::decode_row;
+use crate::types::schema::TableDef;
 use crate::util::{from_hex_32, hex};
 use std::collections::HashMap;
 
@@ -20,6 +22,8 @@ use std::collections::HashMap;
 pub struct VerifyReport {
     pub records: u64,
     pub objects: u64,
+    pub tables: u64,
+    pub table_rows: u64,
     pub files: u64,
     pub chunks: u64,
     pub chunk_bytes_checked: u64,
@@ -181,6 +185,98 @@ impl Db {
                 }
             }
         }
+        self.verify_tables(&mut r, &note)?;
         Ok(r)
+    }
+
+    /// Typed tables: every definition decodes, every row belongs to a table, decodes, fits the table's current schema (types, NOT NULL), and sits
+    /// under the key its own primary-key values make.
+    fn verify_tables(
+        &self,
+        r: &mut VerifyReport,
+        note: &dyn Fn(&mut VerifyReport, String),
+    ) -> Result<()> {
+        let ks = &self.inner.ks;
+        let mut defs: HashMap<u32, TableDef> = HashMap::new();
+        for g in ks.tables.iter() {
+            let (k, v) = g.into_inner()?;
+            if k.as_ref() == [0u8] {
+                continue; // the next-id counter
+            }
+            let name = String::from_utf8_lossy(&k).to_string();
+            match TableDef::from_bytes(&v) {
+                Ok(d) => {
+                    r.tables += 1;
+                    if d.name != name {
+                        note(
+                            r,
+                            format!("table \"{name}\": its definition says it is \"{}\"", d.name),
+                        );
+                    }
+                    if d.primary_key.is_empty() {
+                        note(r, format!("table \"{name}\": it has no primary key"));
+                    }
+                    if defs.insert(d.id, d).is_some() {
+                        note(
+                            r,
+                            format!("table \"{name}\": its id is used by another table"),
+                        );
+                    }
+                }
+                Err(e) => note(r, format!("table \"{name}\": {e}")),
+            }
+        }
+        for g in ks.rows.iter() {
+            let (k, v) = g.into_inner()?;
+            r.table_rows += 1;
+            let Some(id) = k
+                .get(..4)
+                .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+            else {
+                note(r, "a table row has a key that is too short".into());
+                continue;
+            };
+            let Some(def) = defs.get(&id) else {
+                note(
+                    r,
+                    format!("a row belongs to table id {id}, which does not exist"),
+                );
+                continue;
+            };
+            let cols = match decode_row(&v) {
+                Ok(c) => c,
+                Err(e) => {
+                    note(
+                        r,
+                        format!("table \"{}\": a row does not decode: {e}", def.name),
+                    );
+                    continue;
+                }
+            };
+            if let Err(e) = def.project(&cols) {
+                note(
+                    r,
+                    format!("table \"{}\": a row does not fit the table: {e}", def.name),
+                );
+            }
+            match def.key_for_row(&cols) {
+                Ok(expect) if expect == k[4..] => {}
+                Ok(_) => note(
+                    r,
+                    format!(
+                        "table \"{}\": a row is stored under a key that is not its primary key",
+                        def.name
+                    ),
+                ),
+                Err(e) => note(
+                    r,
+                    format!(
+                        "table \"{}\": a row's primary key cannot be read: {e}",
+                        def.name
+                    ),
+                ),
+            }
+        }
+        Ok(())
     }
 }
