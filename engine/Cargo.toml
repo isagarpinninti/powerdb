@@ -47,6 +47,14 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
+[features]
+# Failure injection for the recovery tests (see src/failpoint.rs). Never enabled in a release build.
+failpoints = []
+
+[[test]]
+name = "failpoints"
+required-features = ["failpoints"]
+
 [dev-dependencies]
 http-body-util = "0.1.5"
 

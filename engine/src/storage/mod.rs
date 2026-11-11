@@ -530,9 +530,11 @@ impl Db {
             guard.staged_segments.push(ptr.seg); // released when the guard drops, even if this function fails below
             new_ptrs.insert(key, ptr);
         }
+        crate::failpoint!("stage.after_append");
         if self.inner.opts.durability == Durability::Commit && !new_ptrs.is_empty() {
             self.inner.log.sync()?;
         }
+        crate::failpoint!("stage.after_sync");
         let manifest = Manifest { size, chunks };
         let file_id = manifest.file_id();
         Ok(PendingFile {
@@ -814,8 +816,12 @@ impl Db {
             (Some(o), None) => batch.remove(&ks.records, rec_key(&o.collection, &o.id)),
             (None, None) => {}
         }
+        crate::failpoint!("commit.before_batch");
         batch.commit()?;
-        self.persist()
+        crate::failpoint!("commit.after_batch");
+        self.persist()?;
+        crate::failpoint!("commit.after_persist");
+        Ok(())
     }
 
     // ---- reading files ----

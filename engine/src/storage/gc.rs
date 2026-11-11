@@ -87,7 +87,9 @@ impl Db {
                 (cur + add).to_le_bytes().to_vec(),
             );
         }
+        crate::failpoint!("gc.before_commit");
         batch.commit()?;
+        crate::failpoint!("gc.after_commit");
         Ok(stats)
     }
 
@@ -154,6 +156,7 @@ impl Db {
             log.sync()?; // the copies must be durable before the index points at them
         }
 
+        crate::failpoint!("compact.after_copy");
         // Phase 2, under the commit lock: repoint or delete, atomically.
         {
             let _g = self.inner.commit.lock().unwrap_or_else(|e| e.into_inner());
@@ -181,12 +184,15 @@ impl Db {
                 }
             }
             batch.remove(&ks.seg_dead, seg.to_be_bytes().to_vec());
+            crate::failpoint!("compact.before_commit");
             batch.commit()?;
             if self.inner.opts.durability == super::Durability::Commit {
                 self.inner.store.persist(fjall::PersistMode::SyncAll)?;
             }
+            crate::failpoint!("compact.after_commit");
         }
         log.remove_segment(seg)?;
+        crate::failpoint!("compact.after_remove");
         Ok(CompactStats {
             segments_compacted: 1,
             bytes_reclaimed: seg_len.saturating_sub(copied),

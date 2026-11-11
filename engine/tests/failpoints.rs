@@ -1,0 +1,299 @@
+//! Recovery after a crash at every named point in the commit, collection and compaction paths.
+//!
+//! Run with `cargo test --release --features failpoints --test failpoints`. A child process runs a fixed workload and is aborted at a chosen point
+//! (see `src/failpoint.rs`). The parent then reopens the directory and requires, for each point:
+//!   * `verify` (every chunk read and hashed, every reference count recomputed) finds nothing wrong;
+//!   * everything the child acknowledged is present with the right bytes (a write in flight may be present or absent, never half there);
+//!   * the database still works: it accepts a write, collects and compacts, and is still consistent afterwards.
+//!
+//! A point the workload never reaches fails the test, so a point cannot silently stop being covered.
+
+use powerdb::model::{CollectionDef, FieldDef, FieldKind, Rules};
+use powerdb::storage::chunker::ChunkSizes;
+use powerdb::util::{from_hex_32, new_id};
+use powerdb::{Db, Durability, Options};
+use serde_json::{Map, json};
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Cursor, Write};
+use std::process::{Command, Stdio};
+
+type Content = (u8, u8);
+
+fn bytes_of((base, variant): Content) -> Vec<u8> {
+    let mut x = (base as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut v: Vec<u8> = (0..150_000)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 24) as u8
+        })
+        .collect();
+    if variant > 0 {
+        let at = 40_000 + variant as usize * 20_000;
+        for b in &mut v[at..at + 64] {
+            *b = b.wrapping_add(variant);
+        }
+    }
+    v
+}
+
+fn options() -> Options {
+    Options {
+        // every commit is fsynced: the property under test is that an acknowledged write survives
+        durability: Durability::Commit,
+        segment_bytes: 512 << 10, // small, so segments seal and compaction has work
+        chunk: ChunkSizes {
+            min: 8 << 10,
+            avg: 32 << 10,
+            max: 128 << 10,
+        },
+        verify_reads: true,
+        cache_bytes: None,
+    }
+}
+
+fn schema() -> CollectionDef {
+    CollectionDef {
+        name: "docs".into(),
+        fields: vec![
+            FieldDef {
+                name: "n".into(),
+                kind: FieldKind::Number,
+                required: false,
+                max: None,
+                mime: vec![],
+                relation: None,
+            },
+            FieldDef {
+                name: "a".into(),
+                kind: FieldKind::File,
+                required: false,
+                max: None,
+                mime: vec![],
+                relation: None,
+            },
+        ],
+        rules: Rules::default(),
+        encrypt: false,
+        created_at: 0,
+    }
+}
+
+fn stage(db: &Db, c: Content) -> powerdb::storage::PendingFile {
+    db.stage_file(
+        "docs",
+        "application/octet-stream",
+        Some("f.bin"),
+        Cursor::new(bytes_of(c)),
+    )
+    .unwrap()
+}
+
+fn fields(n: i64) -> Map<String, serde_json::Value> {
+    json!({ "n": n }).as_object().unwrap().clone()
+}
+
+/// Runs only as the child of `every_failpoint_recovers`; a normal run returns at once.
+#[test]
+fn workload_child() {
+    let Ok(dir) = std::env::var("POWERDB_FP_DIR") else {
+        return;
+    };
+    let db = Db::open(&dir, options()).unwrap();
+    db.create_collection(schema()).unwrap();
+    let mut out = std::io::stdout();
+    let mut say = |line: String| {
+        writeln!(out, "{line}").unwrap();
+        out.flush().unwrap();
+    };
+    let mut live: Vec<String> = Vec::new();
+    for i in 0..45u8 {
+        let c: Content = (i % 13, i % 3);
+        let rec = db
+            .create("docs", fields(i as i64), vec![("a".into(), stage(&db, c))])
+            .unwrap();
+        say(format!("ACK create {} {} {}", rec.id, c.0, c.1));
+        live.push(rec.id);
+        if i % 3 == 2 && live.len() > 2 {
+            let id = live.remove(0);
+            say(format!("TRY delete {id}"));
+            db.delete("docs", &id).unwrap();
+            say(format!("ACK delete {id}"));
+        }
+        if i % 4 == 3 {
+            let id = live[live.len() / 2].clone();
+            let nc: Content = ((i + 5) % 13, (i + 2) % 3);
+            say(format!("TRY update {id} {} {}", nc.0, nc.1));
+            db.update(
+                "docs",
+                &id,
+                Map::new(),
+                vec![("a".into(), stage(&db, nc))],
+                &[],
+            )
+            .unwrap();
+            say(format!("ACK update {id} {} {}", nc.0, nc.1));
+        }
+        if i % 5 == 4 {
+            db.gc_step(10).unwrap();
+        }
+        if i % 7 == 6 {
+            db.compact(0.0).unwrap();
+        }
+    }
+}
+
+#[derive(Default)]
+struct Acked {
+    /// the contents a live record's file may legitimately hold (an update in flight adds a second possibility)
+    live: HashMap<String, Vec<Content>>,
+    maybe_deleted: HashSet<String>,
+}
+
+fn parse(lines: &[String]) -> Acked {
+    let mut a = Acked::default();
+    for l in lines {
+        let p: Vec<&str> = l.split(' ').collect();
+        let c = |i: usize| -> Option<Content> {
+            Some((p.get(i)?.parse().ok()?, p.get(i + 1)?.parse().ok()?))
+        };
+        match p.as_slice() {
+            ["ACK", "create", id, ..] => {
+                if let Some(c) = c(3) {
+                    a.live.insert(id.to_string(), vec![c]);
+                }
+            }
+            ["TRY", "delete", id] => {
+                a.maybe_deleted.insert(id.to_string());
+            }
+            ["ACK", "delete", id] => {
+                a.live.remove(*id);
+                a.maybe_deleted.remove(*id);
+            }
+            ["TRY", "update", id, ..] => {
+                if let (Some(c), Some(v)) = (c(3), a.live.get_mut(*id)) {
+                    v.push(c);
+                }
+            }
+            ["ACK", "update", id, ..] => {
+                if let Some(c) = c(3) {
+                    a.live.insert(id.to_string(), vec![c]);
+                }
+            }
+            _ => {} // a line cut off by the crash
+        }
+    }
+    a
+}
+
+fn check_acked(db: &Db, a: &Acked, ctx: &str) {
+    for (id, allowed) in &a.live {
+        match db.get("docs", id).unwrap() {
+            None => assert!(
+                a.maybe_deleted.contains(id),
+                "{ctx}: acknowledged record {id} is gone"
+            ),
+            Some(rec) => {
+                let got = db
+                    .read_file(&from_hex_32(&rec.files["a"].id).unwrap())
+                    .unwrap_or_else(|e| panic!("{ctx}: reading the file of {id}: {e}"));
+                assert!(
+                    allowed.iter().any(|c| got == bytes_of(*c)),
+                    "{ctx}: the file of {id} is not any of the contents it may hold"
+                );
+            }
+        }
+    }
+}
+
+fn crash_at(point: &str, nth: u64) {
+    let dir = std::env::temp_dir().join(format!("powerdb-fp-{}", new_id()));
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "workload_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("POWERDB_FP_DIR", &dir)
+        .env("POWERDB_FAILPOINT", format!("{point}:{nth}"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let lines: Vec<String> = BufReader::new(child.stdout.take().unwrap())
+        .lines()
+        .map_while(Result::ok)
+        .collect();
+    let status = child.wait().unwrap();
+    assert!(
+        !status.success(),
+        "failpoint {point}:{nth} was never reached: the workload finished normally ({} lines)",
+        lines.len()
+    );
+    let ctx = format!("after a crash at {point}:{nth}");
+    let acked = parse(&lines);
+
+    // 1. it reopens, and is consistent
+    let db =
+        Db::open(&dir, options()).unwrap_or_else(|e| panic!("{ctx}: it would not reopen: {e}"));
+    let r = db.verify(true).unwrap();
+    assert!(
+        r.problems.is_empty(),
+        "{ctx}: verify found {:?}",
+        r.problems
+    );
+    // 2. nothing acknowledged was lost
+    check_acked(&db, &acked, &ctx);
+    // 3. it still works, and stays consistent through collection and compaction
+    let rec = db
+        .create("docs", fields(999), vec![("a".into(), stage(&db, (9, 2)))])
+        .unwrap();
+    while db.gc_step(100).unwrap().files_released > 0 {}
+    db.compact(0.0).unwrap();
+    let r = db.verify(true).unwrap();
+    assert!(
+        r.problems.is_empty(),
+        "{ctx}: verify found {:?} after recovery work",
+        r.problems
+    );
+    check_acked(&db, &acked, &format!("{ctx} (after collection)"));
+    let got = db
+        .read_file(&from_hex_32(&db.get("docs", &rec.id).unwrap().unwrap().files["a"].id).unwrap())
+        .unwrap();
+    assert!(
+        got == bytes_of((9, 2)),
+        "{ctx}: the new record's file differs"
+    );
+    drop(db);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn every_failpoint_recovers() {
+    // (point, which hit to crash on): an early hit and a later one for the paths that run many times
+    for (point, nth) in [
+        ("stage.after_append", 3),
+        ("stage.after_append", 30),
+        ("stage.after_sync", 3),
+        ("stage.after_sync", 30),
+        ("commit.before_batch", 1),
+        ("commit.before_batch", 9),
+        ("commit.before_batch", 40),
+        ("commit.after_batch", 1),
+        ("commit.after_batch", 9),
+        ("commit.after_batch", 40),
+        ("commit.after_persist", 9),
+        ("gc.before_commit", 2),
+        ("gc.after_commit", 2),
+        ("gc.before_commit", 6),
+        ("compact.after_copy", 1),
+        ("compact.before_commit", 1),
+        ("compact.after_commit", 1),
+        ("compact.after_remove", 1),
+        ("compact.before_commit", 3),
+    ] {
+        crash_at(point, nth);
+    }
+}

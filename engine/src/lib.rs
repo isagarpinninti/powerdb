@@ -4,6 +4,7 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod failpoint;
 pub mod fileio;
 pub mod ops;
 pub mod security;

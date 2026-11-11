@@ -17,6 +17,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --release --all-targets -- -D warnings
       - run: cargo test --locked --release
+      # crash the process at every named point in the commit, collection and compaction paths, then check recovery (see engine/src/failpoint.rs)
+      - run: cargo clippy --locked --release -p powerdb --all-targets --features failpoints -- -D warnings
+      - run: cargo test --locked --release -p powerdb --features failpoints --test failpoints
   sdk-and-dashboard:
     strategy:
       fail-fast: false

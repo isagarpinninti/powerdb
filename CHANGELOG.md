@@ -2,6 +2,7 @@
 
 ## Unreleased
 - **Fixed a data-loss bug in file garbage collection** (present in every release up to 0.3.1). If a file was deleted, attached again before the background collector ran (it runs every few seconds), and deleted again, the collector released it twice in one pass. Chunks it shared with another file that was still in use were counted down twice; once compaction ran, those chunks could be deleted and the other file became unreadable (`powerdb check` reports it as a count mismatch or a missing chunk). It needs the same file content (identical bytes) to be re-used within that window, so it is uncommon, but it is real. Upgrading fixes it for future operations; it cannot repair a database where it already happened, though `powerdb check` will show whether that happened.
+- Failure injection: with the `failpoints` feature (never in a release build) a test can abort the process at 11 named points in the commit, collection and compaction paths. A new test crashes at each of them, reopens the data, and requires `powerdb check` to pass, every acknowledged write to be present, and the database to keep working. A deliberately broken compaction order is caught by it.
 - New model-based test: random creates, updates, deletes, collection, compaction and restarts against an in-memory model, checking the stored data and the reference counts after each step. It found the bug above.
 
 ## 0.3.1 (2026-11-11)
