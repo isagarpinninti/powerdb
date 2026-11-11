@@ -1,6 +1,6 @@
 # On-disk format (layout 2)
 
-This describes the current format. Layout 1 (0.1 to 0.3.1) is the same without the `buckets` and `objects` keyspaces; layout 2 adds them (unreleased). Layout number: **2** (`FORMAT_VERSION` in `engine/src/storage/mod.rs`).
+This describes the current format. Layout 1 (0.1 to 0.3.1) is the same without the `buckets` and `objects` keyspaces; layout 2 (0.4.0) adds them. Layout number: **2** (`FORMAT_VERSION` in `engine/src/storage/mod.rs`).
 
 ## Directory
 
@@ -59,7 +59,7 @@ Record ids are time-ordered strings: a 48-bit millisecond clock, a counter and r
 | Layout | Versions | What changed |
 |---|---|---|
 | 1 | 0.1.0 to 0.3.1 | records, files, chunks, users, keys |
-| 2 | unreleased | adds `buckets` and `objects`; a file's reference count also counts object versions. Upgrade from 1: `meta/` is copied to `pre-migration-v1/`, nothing is rewritten, the marker becomes 2. An older binary refuses a layout-2 directory. |
+| 2 | 0.4.0 | adds `buckets` and `objects`; a file's reference count also counts object versions. Upgrade from 1: `meta/` is copied to `pre-migration-v1/`, nothing is rewritten, the marker becomes 2. An older binary refuses a layout-2 directory. |
 
 ## Versioning and upgrades
 

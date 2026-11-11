@@ -30,7 +30,7 @@ No new features. Make later work safe. Status: all five items below exist and ru
 
 Exit: all invariant tests pass; contract suite in CI.
 
-### Phase 1: the object engine (about 3 to 5 weeks) — mostly built, unreleased
+### Phase 1: the object engine (about 3 to 5 weeks) — mostly built, released in 0.4.0
 
 **Status.** Built and tested: the catalog, versioning, delete markers, restore, layout 2 and its migration, the HTTP routes, the CLI, the SDK, the dashboard Files view, backup and verifier coverage, crash tests with object writes, and a measured 1 GiB streamed upload and download (about 445 and 1,140 MiB/s through the CLI on one Apple-silicon laptop, server memory peaking at 55 MiB). **Not built:** retention and expiry fields, a multipart upload route (the file is the raw request body; the dashboard and SDK use that), object metadata filtering, and permissions finer than "administrator" (Phase 4). The list below is the original plan.
 

@@ -1,6 +1,6 @@
 [package]
 name = "powerdb-desktop"
-version = "0.3.1"
+version = "0.4.0"
 description = "PowerDB desktop: install, run and manage a local PowerDB server"
 edition = "2024"
 license = "MIT"

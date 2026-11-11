@@ -82,7 +82,7 @@ The data directory records its layout version in `FORMAT`. A binary refuses, wit
 by a newer layout. A directory written by an older layout is upgraded in place, one step at a time: the metadata (`meta/`) is
 first copied to `pre-migration-v<N>/` (the blob log is append-only and never rewritten, so it is not copied), `FORMAT` is
 rewritten after each completed step, and a failed step stops there and names the copy, so the next start resumes.
-There is only layout 1 so far, so no upgrade has ever run on real data; the machinery is tested with injected steps.
+The first upgrade is 0.3.x (layout 1) to 0.4.0 (layout 2), which adds buckets and objects and rewrites nothing. It is tested on data written by the released 0.3.1 server, but not on large or long-lived databases. **Once a folder has been opened by 0.4.0, 0.3.x refuses it**; going back means restoring the backup you took (or `pre-migration-v1/`, which holds the metadata from before).
 Delete `pre-migration-v<N>/` once you no longer need it.
 
 ## Durability
