@@ -113,6 +113,16 @@ Things it has **not** had, and that you should weigh before trusting it with dat
 
 Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
+## Try it and tell us
+
+If you try PowerDB, the most useful thing you can do is say how it went, including when it went badly. Follow [the guide](docs/GUIDE.md) for ten minutes, or use it on something real, then tell us in [Discussions](https://github.com/isagarpinninti/powerdb/discussions):
+
+- Did the first ten minutes work?
+- Where did you get stuck?
+- What did you expect to find that was not there?
+
+A bug goes in an [issue](https://github.com/isagarpinninti/powerdb/issues/new/choose) instead. Please do not put data you cannot replace into it yet; see the list above.
+
 ## Building it
 
 You need Rust (stable) and, to work on the dashboard or app, Node 22 or newer.
