@@ -1,5 +1,15 @@
 # Design: types, tables, constraints and indexes (Phase 2)
 
+> **Status: slice 2a is built** (`engine/src/types/`): the type system, the row codec and the key codec, as a library that changes nothing on disk.
+> It has 16 tests (seeded random round trips for every type, order of keys against an independent oracle, 15 malformed-row cases, mutation fuzzing
+> of both decoders under an allocation guard) and two libFuzzer targets (`row`, `key`; compiled, run by the weekly fuzz workflow, not run locally).
+> Each check was shown to fail when the thing it guards is broken. Slices 2b to 2g are not started.
+>
+> What building it showed: **(1)** the strict, canonical row format caught that `serde_json` by default does not round-trip floats exactly, so a
+> JSON value written by PowerDB could fail to read back; the `float_roundtrip` feature of the crate is now on (no new dependency; it also makes
+> every float in existing records parse exactly). **(2)** A typical invoice row is 80 bytes against 193 bytes as JSON (about 41%), though the row
+> relies on the catalog for column names, which JSON carries in every record.
+
 This is the design for the second phase of [the roadmap](ROADMAP.md). It is written before any code because the row encoding becomes part of the on-disk format: a mistake here is paid for in every migration afterwards. Nothing in this page is built yet. Where a choice is a recommendation, the alternatives and the reason are given so it can be overruled.
 
 ## What has to be true when it is done

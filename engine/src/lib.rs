@@ -11,6 +11,7 @@ pub mod ops;
 pub mod security;
 pub mod server;
 pub mod storage;
+pub mod types;
 pub mod util;
 
 pub use error::{Error, Result};

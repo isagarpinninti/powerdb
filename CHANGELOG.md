@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- Groundwork for typed tables: a type system with row and index-key codecs (`engine/src/types`), not yet used by storage. See docs/TYPES_AND_TABLES.md.
+- JSON numbers with many digits now parse exactly (`serde_json`'s `float_roundtrip`). Before, a float with 17 significant digits could come back one bit different after being read.
+- Two new fuzz targets, `row` and `key`.
+
 ## 0.4.0 (2026-11-11)
 **Upgrading:** this release changes the on-disk layout from 1 to 2 the first time a 0.3.x data folder is opened (a copy of the metadata is kept in `pre-migration-v1/`). Take a backup first, and note that 0.3.x cannot open the upgraded folder. It also contains a fix for a data-loss bug in file garbage collection (below), so upgrading is advisable for everyone.
 - **Buckets and objects (storage layer).** Files that exist without a record: `bucket` + `key` names a file, with a stable object id, filename, MIME type, size, BLAKE3 checksum and custom metadata. Optional versioning per bucket (every put kept; a delete adds a marker; a named version can be removed for good or restored). Objects use the same chunk store as record files, so deduplication, encryption, garbage collection, compaction, backup and `powerdb check` cover them; a record and an object can share one stored file. Administrator-only for now (per-bucket permissions come later).

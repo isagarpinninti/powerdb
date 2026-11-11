@@ -36,5 +36,17 @@ path = "fuzz_targets/settings.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "row"
+path = "fuzz_targets/row.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "key"
+path = "fuzz_targets/key.rs"
+test = false
+doc = false
+
 # not part of the main workspace: it needs a nightly toolchain
 [workspace]
