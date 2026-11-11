@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 (2026-11-11)
+- New look: layered near-black surfaces with hairline borders, a light theme to match, and tighter type. Amber stays the one accent.
+- Pages use the full width of the window instead of a centred column (app and dashboard).
+- The dashboard embedded in the server is rebuilt with these changes (0.3.0 shipped before them).
+- README screenshots retaken.
+
 ## 0.3.0 (2026-11-10)
 - macOS: the app is signed with a stable certificate, so its identity is the same in every build and the Keychain stops asking again after each update (choose **Always Allow** once). The certificate is self-signed: Gatekeeper still warns on first open.
 - New logo: a P built from a stem and a closed bowl, with an amber bar beneath it (the file that belongs to the record). Replaces the lightning bolt. Source files in docs/brand; app, dashboard and favicon updated.
