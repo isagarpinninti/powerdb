@@ -36,6 +36,108 @@ pub struct ColumnDef {
     pub nullable: bool,
     /// What a row that predates the column (or omits it) reads as. `None` reads as null, which `nullable` must then allow.
     pub default: Option<Value>,
+    /// A value made when an insert leaves the column out (a new uuid, the time, the next number). Written into the row, so it never changes after.
+    pub generate: Option<Generator>,
+}
+
+/// What can make a column's value when an insert omits it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Generator {
+    /// A time-ordered version 7 UUID. For a `uuid` column.
+    Uuid,
+    /// The time of the insert. For a `timestamptz`, `timestamp` or `date` column.
+    Now,
+    /// 1, 2, 3 ... per table and column. For an integer column. A number is not used again after a delete or a restart; an insert that fails does not use one up.
+    Sequence,
+}
+
+impl Generator {
+    pub fn name(self) -> &'static str {
+        match self {
+            Generator::Uuid => "uuid",
+            Generator::Now => "now",
+            Generator::Sequence => "sequence",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "uuid" => Generator::Uuid,
+            "now" => Generator::Now,
+            "sequence" => Generator::Sequence,
+            _ => return None,
+        })
+    }
+    /// Whether a column of this type can be filled by this generator.
+    pub fn fits(self, ty: &Type) -> bool {
+        match self {
+            Generator::Uuid => *ty == Type::Uuid,
+            Generator::Now => matches!(ty, Type::TimestampTz | Type::Timestamp | Type::Date),
+            Generator::Sequence => matches!(
+                ty,
+                Type::I8
+                    | Type::I16
+                    | Type::I32
+                    | Type::I64
+                    | Type::U8
+                    | Type::U16
+                    | Type::U32
+                    | Type::U64
+            ),
+        }
+    }
+}
+
+/// What happens to the rows that refer to a row that is deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnDelete {
+    /// Refuse the delete while any row refers to it.
+    Restrict,
+    /// Delete the rows that refer to it too (and, in turn, the rows that refer to those).
+    Cascade,
+    /// Make the referring columns null.
+    SetNull,
+}
+
+impl OnDelete {
+    pub fn name(self) -> &'static str {
+        match self {
+            OnDelete::Restrict => "restrict",
+            OnDelete::Cascade => "cascade",
+            OnDelete::SetNull => "set_null",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "restrict" => OnDelete::Restrict,
+            "cascade" => OnDelete::Cascade,
+            "set_null" => OnDelete::SetNull,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConstraintKind {
+    /// No two rows have the same values in these columns. A row with a null in any of them is not constrained (nulls are distinct, as in SQL).
+    Unique { columns: Vec<u32>, index: u32 },
+    /// The row must satisfy this expression (the language of access rules and filters), read against a JSON view of the row. See `types::convert`.
+    Check { expr: String },
+    /// These columns hold the primary key of a row of another table, or are null.
+    ForeignKey {
+        columns: Vec<u32>,
+        ref_table_id: u32,
+        ref_table: String,
+        on_delete: OnDelete,
+        index: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Constraint {
+    /// Never reused.
+    pub id: u32,
+    pub name: String,
+    pub kind: ConstraintKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,10 +152,41 @@ pub struct TableDef {
     pub next_column_id: u32,
     /// The ids of the columns that identify a row, in key order. Fixed once the table is stored: changing it would change every row's key.
     pub primary_key: Vec<u32>,
+    pub constraints: Vec<Constraint>,
+    pub next_constraint_id: u32,
+    /// The id the next index gets (a unique constraint and a foreign key each keep one).
+    pub next_index_id: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Change {
+    /// A column whose value is made when an insert leaves it out.
+    AddGeneratedColumn {
+        name: String,
+        ty: Type,
+        nullable: bool,
+        generate: Generator,
+    },
+    AddUnique {
+        name: String,
+        columns: Vec<String>,
+    },
+    AddCheck {
+        name: String,
+        expr: String,
+    },
+    /// `ref_table_id` and `ref_pk_types` are the other table's id and primary-key column types, which the caller reads from its catalog.
+    AddForeignKey {
+        name: String,
+        columns: Vec<String>,
+        ref_table: String,
+        ref_table_id: u32,
+        ref_pk_types: Vec<Type>,
+        on_delete: OnDelete,
+    },
+    DropConstraint {
+        name: String,
+    },
     AddColumn {
         name: String,
         ty: Type,
@@ -162,6 +295,9 @@ impl TableDef {
             columns: vec![],
             next_column_id: 1,
             primary_key: vec![],
+            constraints: vec![],
+            next_constraint_id: 1,
+            next_index_id: 1,
         })
     }
 
@@ -343,12 +479,14 @@ impl TableDef {
                     ty: ty.clone(),
                     nullable: *nullable,
                     default: default.clone(),
+                    generate: None,
                 });
                 t.next_column_id += 1;
             }
             Change::DropColumn { name } => {
                 let i = t.find(name)?;
                 t.guard_key(i, "dropped")?;
+                t.guard_constraints(i, "dropped", true)?;
                 t.columns.remove(i); // its id is not given out again: next_column_id only goes up
             }
             Change::RenameColumn { from, to } => {
@@ -361,11 +499,17 @@ impl TableDef {
                     return Err(Error::Conflict(format!("column \"{to}\" already exists")));
                 }
                 let i = t.find(from)?;
+                if let Some(k) = t.check_refs(i)?.first() {
+                    return Err(Error::Invalid(format!(
+                        "\"{from}\" is read by the check \"{k}\" and cannot be renamed; drop the check first"
+                    )));
+                }
                 t.columns[i].name = to.clone();
             }
             Change::WidenColumn { name, to } => {
                 let i = t.find(name)?;
                 t.guard_key(i, "widened")?;
+                t.guard_constraints(i, "widened", false)?;
                 if !widens(&t.columns[i].ty, to) {
                     return Err(Error::Invalid(format!(
                         "{:?} cannot be widened to {to:?}; only to a larger type of the same kind (use ChangeType on an empty table, or migrate the data yourself)",
@@ -393,6 +537,7 @@ impl TableDef {
             Change::ChangeType { name, to } => {
                 let i = t.find(name)?;
                 t.guard_key(i, "given another type")?;
+                t.guard_constraints(i, "given another type", false)?;
                 if t.columns[i].ty != *to && !widens(&t.columns[i].ty, to) && !table_is_empty {
                     return Err(Error::Invalid(format!(
                         "changing \"{name}\" from {:?} to {to:?} would change what the stored values mean; it is only possible while the table has no rows",
@@ -406,9 +551,259 @@ impl TableDef {
                 }
                 t.columns[i].ty = to.clone();
             }
+            Change::AddGeneratedColumn {
+                name,
+                ty,
+                nullable,
+                generate,
+            } => {
+                if !valid_column_name(name) {
+                    return Err(Error::Invalid(format!(
+                        "column name \"{name}\" must be lowercase letters, digits and underscores, starting with a letter (at most {MAX_NAME})"
+                    )));
+                }
+                if t.column(name).is_some() {
+                    return Err(Error::Conflict(format!("column \"{name}\" already exists")));
+                }
+                if !generate.fits(ty) {
+                    return Err(Error::Invalid(format!(
+                        "a {} column cannot be filled by \"{}\"",
+                        ty.name(),
+                        generate.name()
+                    )));
+                }
+                if !nullable && !table_is_empty {
+                    return Err(Error::Invalid(format!(
+                        "column \"{name}\" is NOT NULL and generated, but the existing rows have no value for it; add it as nullable, or on an empty table"
+                    )));
+                }
+                t.columns.push(ColumnDef {
+                    id: t.next_column_id,
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    nullable: *nullable,
+                    default: None,
+                    generate: Some(*generate),
+                });
+                t.next_column_id += 1;
+            }
+            Change::AddUnique { name, columns } => {
+                t.new_constraint_name(name)?;
+                let ids = t.key_columns(columns, "a unique constraint")?;
+                t.constraints.push(Constraint {
+                    id: t.next_constraint_id,
+                    name: name.clone(),
+                    kind: ConstraintKind::Unique {
+                        columns: ids,
+                        index: t.next_index_id,
+                    },
+                });
+                t.next_constraint_id += 1;
+                t.next_index_id += 1;
+                if !table_is_empty {
+                    effect = Effect::NeedsScan(
+                        "no two rows may have the same values in these columns".into(),
+                    );
+                }
+            }
+            Change::AddCheck { name, expr } => {
+                t.new_constraint_name(name)?;
+                for c in Self::expr_columns(expr)? {
+                    if t.column(&c).is_none()
+                        && !["id", "created_at", "updated_at", "collection"].contains(&c.as_str())
+                    {
+                        return Err(Error::Invalid(format!(
+                            "the check reads a column \"{c}\" that the table does not have"
+                        )));
+                    }
+                }
+                t.constraints.push(Constraint {
+                    id: t.next_constraint_id,
+                    name: name.clone(),
+                    kind: ConstraintKind::Check { expr: expr.clone() },
+                });
+                t.next_constraint_id += 1;
+                if !table_is_empty {
+                    effect = Effect::NeedsScan("every row must satisfy the check".into());
+                }
+            }
+            Change::AddForeignKey {
+                name,
+                columns,
+                ref_table,
+                ref_table_id,
+                ref_pk_types,
+                on_delete,
+            } => {
+                t.new_constraint_name(name)?;
+                let ids = t.key_columns(columns, "a foreign key")?;
+                if ids.len() != ref_pk_types.len() {
+                    return Err(Error::Invalid(format!(
+                        "the primary key of \"{ref_table}\" has {} column(s); the foreign key names {}",
+                        ref_pk_types.len(),
+                        ids.len()
+                    )));
+                }
+                for (id, want) in ids.iter().zip(ref_pk_types) {
+                    let c = t.column_by_id(*id).expect("checked above");
+                    if c.ty != *want {
+                        return Err(Error::Invalid(format!(
+                            "column \"{}\" is {}, but the key it refers to is {}",
+                            c.name,
+                            c.ty.name(),
+                            want.name()
+                        )));
+                    }
+                }
+                if *on_delete == OnDelete::SetNull {
+                    for id in &ids {
+                        let c = t.column_by_id(*id).expect("checked above");
+                        if !c.nullable || t.primary_key.contains(id) || c.default.is_some() {
+                            return Err(Error::Invalid(format!(
+                                "on delete set null needs nullable columns with no default, outside the primary key; \"{}\" is not",
+                                c.name
+                            )));
+                        }
+                    }
+                }
+                t.constraints.push(Constraint {
+                    id: t.next_constraint_id,
+                    name: name.clone(),
+                    kind: ConstraintKind::ForeignKey {
+                        columns: ids,
+                        ref_table_id: *ref_table_id,
+                        ref_table: ref_table.clone(),
+                        on_delete: *on_delete,
+                        index: t.next_index_id,
+                    },
+                });
+                t.next_constraint_id += 1;
+                t.next_index_id += 1;
+                if !table_is_empty {
+                    effect = Effect::NeedsScan("every row must refer to a row that exists".into());
+                }
+            }
+            Change::DropConstraint { name } => {
+                let i = t
+                    .constraints
+                    .iter()
+                    .position(|k| k.name == *name)
+                    .ok_or_else(|| Error::NotFound(format!("constraint \"{name}\"")))?;
+                t.constraints.remove(i);
+            }
         }
         t.version += 1;
         Ok((t, effect))
+    }
+
+    // ---- constraints ----
+
+    /// The names of the columns a CHECK constraint reads.
+    fn expr_columns(expr: &str) -> Result<Vec<String>> {
+        fn walk(e: &crate::security::expr::Expr, out: &mut Vec<String>) {
+            use crate::security::expr::Expr;
+            match e {
+                Expr::Path { at: false, parts } => {
+                    let head = if parts.first().map(String::as_str) == Some("record") {
+                        parts.get(1)
+                    } else {
+                        parts.first()
+                    };
+                    if let Some(h) = head {
+                        out.push(h.clone());
+                    }
+                }
+                Expr::Not(a) => walk(a, out),
+                Expr::And(a, b) | Expr::Or(a, b) | Expr::Cmp(_, a, b) => {
+                    walk(a, out);
+                    walk(b, out);
+                }
+                _ => {}
+            }
+        }
+        let e = crate::security::expr::parse(expr)?;
+        if e.uses_request() {
+            return Err(Error::Invalid(
+                "a CHECK reads the row only; it cannot use @request values".into(),
+            ));
+        }
+        let mut out = Vec::new();
+        walk(&e, &mut out);
+        Ok(out)
+    }
+
+    /// The CHECK constraints that read column `i`, by constraint name.
+    fn check_refs(&self, i: usize) -> Result<Vec<String>> {
+        let name = &self.columns[i].name;
+        let mut out = Vec::new();
+        for k in &self.constraints {
+            if let ConstraintKind::Check { expr } = &k.kind
+                && Self::expr_columns(expr)?.iter().any(|c| c == name)
+            {
+                out.push(k.name.clone());
+            }
+        }
+        Ok(out)
+    }
+
+    /// A column named by a unique constraint or a foreign key (whose key encoding it feeds), or read by a CHECK, cannot change underneath it.
+    fn guard_constraints(&self, i: usize, what: &str, include_checks: bool) -> Result<()> {
+        let c = &self.columns[i];
+        for k in &self.constraints {
+            let used = match &k.kind {
+                ConstraintKind::Unique { columns, .. }
+                | ConstraintKind::ForeignKey { columns, .. } => columns.contains(&c.id),
+                ConstraintKind::Check { .. } => {
+                    include_checks && self.check_refs(i)?.contains(&k.name)
+                }
+            };
+            if used {
+                return Err(Error::Invalid(format!(
+                    "\"{}\" is used by the constraint \"{}\" and cannot be {what}; drop the constraint first",
+                    c.name, k.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn new_constraint_name(&self, name: &str) -> Result<()> {
+        if !valid_column_name(name) {
+            return Err(Error::Invalid(format!(
+                "constraint name \"{name}\" must be lowercase letters, digits and underscores, starting with a letter (at most {MAX_NAME})"
+            )));
+        }
+        if self.constraints.iter().any(|k| k.name == name) {
+            return Err(Error::Conflict(format!(
+                "constraint \"{name}\" already exists"
+            )));
+        }
+        Ok(())
+    }
+
+    fn key_columns(&self, names: &[String], what: &str) -> Result<Vec<u32>> {
+        if names.is_empty() {
+            return Err(Error::Invalid(format!("{what} needs at least one column")));
+        }
+        let mut ids = Vec::new();
+        for n in names {
+            let c = self.column(n).ok_or_else(|| {
+                Error::Invalid(format!(
+                    "{what} names a column \"{n}\" that the table does not have"
+                ))
+            })?;
+            if !c.ty.indexable() {
+                return Err(Error::Invalid(format!(
+                    "column \"{n}\" has type {}, which {what} cannot use",
+                    c.ty.name()
+                )));
+            }
+            if ids.contains(&c.id) {
+                return Err(Error::Invalid(format!("column \"{n}\" is listed twice")));
+            }
+            ids.push(c.id);
+        }
+        Ok(ids)
     }
 
     /// Reads a stored row (`(column id, value)` pairs, as `decode_row` returns them) under this schema: one entry per current column, in column
@@ -438,6 +833,20 @@ impl TableDef {
 
     /// The row to store for these named values: column ids for the names, a type check on each value, `NOT NULL` and defaults applied.
     pub fn build_row(&self, values: &[(&str, Value)]) -> Result<Vec<(u32, Value)>> {
+        self.build_row_with(values, &mut |c, _| {
+            Err(Error::Invalid(format!(
+                "column \"{}\" is generated, which needs the database to make the value",
+                c.name
+            )))
+        })
+    }
+
+    /// Like `build_row`, but a column that is left out and has a generator is filled by `generate`.
+    pub fn build_row_with(
+        &self,
+        values: &[(&str, Value)],
+        generate: &mut dyn FnMut(&ColumnDef, Generator) -> Result<Value>,
+    ) -> Result<Vec<(u32, Value)>> {
         for (name, _) in values {
             if self.column(name).is_none() {
                 return Err(Error::Invalid(format!(
@@ -452,6 +861,10 @@ impl TableDef {
                 .iter()
                 .find(|(n, _)| *n == c.name)
                 .map(|(_, v)| v.clone());
+            let given = match (given, c.generate) {
+                (None, Some(g)) => Some(generate(c, g)?),
+                (g, _) => g,
+            };
             match given.or_else(|| c.default.clone()) {
                 Some(v) => {
                     if v.type_of() != c.ty {
@@ -511,11 +924,25 @@ impl TableDef {
             };
             cols.push(serde_json::json!({
                 "id": c.id, "name": c.name, "type": c.ty.name(), "nullable": c.nullable, "default": default,
+                "generate": c.generate.map(|g| g.name()),
             }));
         }
+        let constraints: Vec<serde_json::Value> = self
+            .constraints
+            .iter()
+            .map(|k| match &k.kind {
+                ConstraintKind::Unique { columns, index } => serde_json::json!({"id": k.id, "name": k.name, "kind": "unique", "columns": columns, "index": index}),
+                ConstraintKind::Check { expr } => serde_json::json!({"id": k.id, "name": k.name, "kind": "check", "expr": expr}),
+                ConstraintKind::ForeignKey { columns, ref_table_id, ref_table, on_delete, index } => serde_json::json!({
+                    "id": k.id, "name": k.name, "kind": "foreign_key", "columns": columns, "ref_table_id": ref_table_id,
+                    "ref_table": ref_table, "on_delete": on_delete.name(), "index": index,
+                }),
+            })
+            .collect();
         Ok(serde_json::to_vec(&serde_json::json!({
             "format": 1, "id": self.id, "name": self.name, "version": self.version, "next_column_id": self.next_column_id,
-            "primary_key": self.primary_key, "columns": cols,
+            "primary_key": self.primary_key, "columns": cols, "constraints": constraints,
+            "next_constraint_id": self.next_constraint_id, "next_index_id": self.next_index_id,
         }))?)
     }
 
@@ -562,6 +989,10 @@ impl TableDef {
                 ty,
                 nullable: c["nullable"].as_bool().ok_or_else(|| corrupt("nullable"))?,
                 default,
+                generate: match c["generate"].as_str() {
+                    None => None,
+                    Some(g) => Some(Generator::parse(g).ok_or_else(|| corrupt("a generator"))?),
+                },
             });
         }
         let primary_key = v["primary_key"]
@@ -574,7 +1005,77 @@ impl TableDef {
                     .ok_or_else(|| corrupt("a key column"))
             })
             .collect::<Result<Vec<_>>>()?;
+        let ids = |k: &serde_json::Value, f: &str| -> Result<Vec<u32>> {
+            k[f].as_array()
+                .ok_or_else(|| corrupt(f))?
+                .iter()
+                .map(|x| {
+                    x.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| corrupt(f))
+                })
+                .collect()
+        };
+        let u = |k: &serde_json::Value, f: &str| -> Result<u32> {
+            k[f].as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| corrupt(f))
+        };
+        let mut constraints = Vec::new();
+        for k in v["constraints"]
+            .as_array()
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+        {
+            let kind = match k["kind"].as_str() {
+                Some("unique") => ConstraintKind::Unique {
+                    columns: ids(k, "columns")?,
+                    index: u(k, "index")?,
+                },
+                Some("check") => ConstraintKind::Check {
+                    expr: k["expr"]
+                        .as_str()
+                        .ok_or_else(|| corrupt("a check"))?
+                        .to_string(),
+                },
+                Some("foreign_key") => ConstraintKind::ForeignKey {
+                    columns: ids(k, "columns")?,
+                    ref_table_id: u(k, "ref_table_id")?,
+                    ref_table: k["ref_table"]
+                        .as_str()
+                        .ok_or_else(|| corrupt("a foreign key"))?
+                        .to_string(),
+                    on_delete: k["on_delete"]
+                        .as_str()
+                        .and_then(OnDelete::parse)
+                        .ok_or_else(|| corrupt("on_delete"))?,
+                    index: u(k, "index")?,
+                },
+                _ => {
+                    return Err(corrupt(
+                        "a constraint kind this build does not know; run a newer PowerDB",
+                    ));
+                }
+            };
+            constraints.push(Constraint {
+                id: u(k, "id")?,
+                name: k["name"]
+                    .as_str()
+                    .ok_or_else(|| corrupt("a constraint name"))?
+                    .to_string(),
+                kind,
+            });
+        }
         Ok(Self {
+            constraints,
+            next_constraint_id: v["next_constraint_id"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(1),
+            next_index_id: v["next_index_id"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(1),
             id: num("id")?,
             name: v["name"]
                 .as_str()

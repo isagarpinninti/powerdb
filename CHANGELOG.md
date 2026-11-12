@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- **Constraints on typed tables (engine level).** UNIQUE (single or composite; nulls are distinct), CHECK (the rule-expression language over a JSON view of the row), FOREIGN KEY with restrict, cascade and set null (including a table referring to itself), and generated column values (`uuid` v7, `now`, `sequence`). Enforced inside the commit: a row, its index entries and anything a delete cascades to are one atomic batch. Adding a constraint to a table with rows checks the rows first. `powerdb check` recomputes every index entry and re-checks every row's constraints and foreign keys. See docs/TYPES_AND_TABLES.md for the exact rules and limits. No HTTP routes, CLI or dashboard for tables yet.
+- A new `indexes` keyspace (still layout 3, which is unreleased).
 - **Typed tables in storage (layout 3), engine level.** Create, alter and drop tables; insert, read, update, delete and scan rows by primary key (single or composite); schema changes (add, drop, rename, widen, NOT NULL) apply to rows already stored without rewriting them; `powerdb check` verifies definitions and rows. A column with a default cannot be set to null, and a primary key cannot change once the table is stored (see docs/TYPES_AND_TABLES.md). No HTTP routes, CLI or dashboard yet. Collections are untouched.
 - **On-disk layout 3.** Adds the `tables` and `rows` keyspaces; nothing is rewritten. A layout-2 folder is copied to `pre-migration-v2/` on first open, and 0.4.x cannot open the result.
 - The upgrade test now also writes versioned objects with the old release and checks them after the upgrade.

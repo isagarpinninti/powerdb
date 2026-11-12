@@ -24,6 +24,7 @@ pub struct VerifyReport {
     pub objects: u64,
     pub tables: u64,
     pub table_rows: u64,
+    pub indexes: u64,
     pub files: u64,
     pub chunks: u64,
     pub chunk_bytes_checked: u64,
@@ -200,8 +201,8 @@ impl Db {
         let mut defs: HashMap<u32, TableDef> = HashMap::new();
         for g in ks.tables.iter() {
             let (k, v) = g.into_inner()?;
-            if k.as_ref() == [0u8] {
-                continue; // the next-id counter
+            if k.first().is_none_or(|b| *b < b'a') {
+                continue; // the next-table-id counter and the sequence counters
             }
             let name = String::from_utf8_lossy(&k).to_string();
             match TableDef::from_bytes(&v) {
@@ -226,6 +227,8 @@ impl Db {
                 Err(e) => note(r, format!("table \"{name}\": {e}")),
             }
         }
+        // what the index entries should be, from the rows alone
+        let mut expected: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
         for g in ks.rows.iter() {
             let (k, v) = g.into_inner()?;
             r.table_rows += 1;
@@ -259,6 +262,41 @@ impl Db {
                     format!("table \"{}\": a row does not fit the table: {e}", def.name),
                 );
             }
+            if let Ok(eff) = super::tables::effective(def, &cols) {
+                if let Err(e) = self.check_constraints(def, &eff) {
+                    note(
+                        r,
+                        format!("table \"{}\": a row breaks a constraint: {e}", def.name),
+                    );
+                }
+                if let Err(e) = self.check_fks(def, &eff, None) {
+                    note(r, format!("table \"{}\": {e}", def.name));
+                }
+                match super::tables::index_entries(def, &eff, &k[4..]) {
+                    Ok(entries) => {
+                        for (ik, iv) in entries {
+                            if let Some(prev) = expected.insert(ik, iv.clone())
+                                && prev != iv
+                            {
+                                note(
+                                    r,
+                                    format!(
+                                        "table \"{}\": two rows have the same value in a unique constraint",
+                                        def.name
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => note(
+                        r,
+                        format!(
+                            "table \"{}\": a row's index entries cannot be computed: {e}",
+                            def.name
+                        ),
+                    ),
+                }
+            }
             match def.key_for_row(&cols) {
                 Ok(expect) if expect == k[4..] => {}
                 Ok(_) => note(
@@ -276,6 +314,29 @@ impl Db {
                     ),
                 ),
             }
+        }
+        // the stored index entries must be exactly those
+        for g in ks.indexes.iter() {
+            let (k, v) = g.into_inner()?;
+            r.indexes += 1;
+            match expected.remove(k.as_ref()) {
+                Some(want) if want == v.as_ref() => {}
+                Some(_) => note(r, "an index entry points at the wrong row".into()),
+                None => note(
+                    r,
+                    "an index entry belongs to no row (or to a constraint that no longer exists)"
+                        .into(),
+                ),
+            }
+        }
+        let missing = expected.len();
+        if missing > 0 {
+            note(
+                r,
+                format!(
+                    "{missing} index entries are missing: rows that a unique constraint or foreign key should have entries for"
+                ),
+            );
         }
         Ok(())
     }

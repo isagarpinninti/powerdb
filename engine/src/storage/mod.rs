@@ -99,6 +99,8 @@ pub(crate) struct Spaces {
     pub tables: Keyspace,
     /// Typed rows, keyed `table id` + primary key (layout 3).
     pub rows: Keyspace,
+    /// Index entries for unique constraints and foreign keys, keyed `table id` + `index id` + the indexed values (layout 3).
+    pub indexes: Keyspace,
 }
 
 pub(crate) struct Inner {
@@ -341,6 +343,7 @@ impl Db {
             objects: store.keyspace("objects", o)?,
             tables: store.keyspace("tables", o)?,
             rows: store.keyspace("rows", o)?,
+            indexes: store.keyspace("indexes", o)?,
         };
         let log = SegmentLog::open(&path.join("blobs"), opts.segment_bytes)?;
         let next_seq = match ks.gc_queue.last_key_value() {

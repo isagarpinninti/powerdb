@@ -43,6 +43,9 @@ All are fjall keyspaces under `meta/`. A commit writes across them in one atomic
 | `seg_dead` | segment number | bytes of dead entries in that segment, to choose compaction candidates |
 | `tables` (layout 3) | table name; and the reserved key `[0x00]` | The table definition (JSON, `TableDef::to_bytes`: stable table id, column ids, types, defaults, primary key, schema version); the reserved key holds the next table id (`u32`, big-endian). Table names start with a lowercase letter, so none can be `[0x00]`. |
 | `rows` (layout 3) | table id (`u32` big-endian) + the primary key's key encoding ([TYPES_AND_TABLES.md](TYPES_AND_TABLES.md)) | The row (`types::row`: version byte, then `(column id, type tag, value)` in ascending id order). A null column is absent. |
+
+The `tables` keyspace also holds, under keys that start with the byte `1`, the last value of each sequence (`1` + table id + column id -> `u64`, big-endian). |
+| `indexes` (layout 3) | table id + index id (each `u32`, big-endian) + the indexed columns' key encoding (+ the row's primary key, for a foreign key) | The row's primary key. One entry per row per unique constraint and foreign key; none for a row with a null in an indexed column. Recomputed and compared by `powerdb check`. |
 | `buckets` (layout 2) | bucket name | JSON `BucketDef` (`name`, `versioning`, `encrypt`, `created_at`) |
 | `objects` (layout 2) | `bucket` + `0x00` + `key` + `0x00` + version id | JSON `ObjectMeta`: stable object id, version id, delete-marker flag, file id (the manifest id), size, MIME type, filename, BLAKE3 checksum of the content, created time, custom metadata |
 | `users`, `keys`, `sys` | (auth module) | users with Argon2id hashes, API key hashes and scopes, server secrets |

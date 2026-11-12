@@ -593,6 +593,18 @@ impl Expr {
         }
     }
 
+    /// Whether the expression reads request values (`@request.*`, `@auth.*`): a CHECK on a row must not.
+    pub fn uses_request(&self) -> bool {
+        match self {
+            Expr::Path { at, .. } => *at,
+            Expr::Lit(_) | Expr::List(_) => false,
+            Expr::Not(a) => a.uses_request(),
+            Expr::And(a, b) | Expr::Or(a, b) | Expr::Cmp(_, a, b) => {
+                a.uses_request() || b.uses_request()
+            }
+        }
+    }
+
     pub fn eval(&self, c: &Ctx<'_>) -> Value {
         match self {
             Expr::Lit(v) => v.clone(),

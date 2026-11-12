@@ -4,6 +4,7 @@
 //! This module is a library. It does not touch storage: nothing here changes what is on disk today. The row format is permanent once data is
 //! written in it, so it is deliberately plain, strict (a row has exactly one valid encoding) and covered by property tests.
 
+pub mod convert;
 pub mod decimal;
 pub mod key;
 pub mod row;

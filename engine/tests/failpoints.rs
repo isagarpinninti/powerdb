@@ -129,6 +129,48 @@ fn workload_child() {
         }
         t.set_primary_key(&["k"]).unwrap();
         db.create_table(t).unwrap();
+        // a child table: a unique tag, and a foreign key to `tt` that cascades, so a delete of a `tt` row also removes (and un-indexes) its child
+        let mut c = TableDef::new("tc").unwrap();
+        for (n, ty, nullable) in [
+            ("k", Type::I64, false),
+            ("tk", Type::I64, true),
+            ("tag", Type::Text, true),
+        ] {
+            c = c
+                .apply(
+                    &Change::AddColumn {
+                        name: n.into(),
+                        ty,
+                        nullable,
+                        default: None,
+                    },
+                    true,
+                )
+                .unwrap()
+                .0;
+        }
+        c.set_primary_key(&["k"]).unwrap();
+        db.create_table(c).unwrap();
+        db.alter_table(
+            "tc",
+            &Change::AddUnique {
+                name: "tc_tag".into(),
+                columns: vec!["tag".into()],
+            },
+        )
+        .unwrap();
+        db.alter_table(
+            "tc",
+            &Change::AddForeignKey {
+                name: "tc_tt".into(),
+                columns: vec!["tk".into()],
+                ref_table: "tt".into(),
+                ref_table_id: 0,
+                ref_pk_types: vec![],
+                on_delete: powerdb::types::schema::OnDelete::Cascade,
+            },
+        )
+        .unwrap();
     }
     let mut out = std::io::stdout();
     let mut say = |line: String| {
@@ -171,6 +213,15 @@ fn workload_child() {
             db.insert_row("tt", &[("k", V::I64(k)), ("v", V::Text("a".into()))])
                 .unwrap();
             say(format!("ACK trow {k} a"));
+            db.insert_row(
+                "tc",
+                &[
+                    ("k", V::I64(k)),
+                    ("tk", V::I64(k)),
+                    ("tag", V::Text(format!("t{k}"))),
+                ],
+            )
+            .unwrap();
             if i % 3 == 2 {
                 let j = k - 1;
                 say(format!("TRY tupd {j} b"));
@@ -259,7 +310,12 @@ fn parse(lines: &[String]) -> Acked {
             }
             ["TRY", "put", key, ..] => {
                 if let Some(c) = c(3) {
-                    a.objects.entry(key.to_string()).or_default().0.push(c);
+                    // a put that was started but never acknowledged: if the key had never existed, it may still not
+                    a.objects
+                        .entry(key.to_string())
+                        .or_insert((vec![], true))
+                        .0
+                        .push(c);
                 }
             }
             ["ACK", "put", key, ..] => {
@@ -468,4 +524,146 @@ fn every_failpoint_recovers() {
     ] {
         crash_at(point, nth);
     }
+}
+
+// ---- a cascading delete is all or nothing, whichever commit the crash lands on ----
+
+fn cascade_tables(db: &Db) {
+    use powerdb::types::Type;
+    use powerdb::types::schema::{Change, OnDelete, TableDef};
+    let make = |name: &str, cols: &[(&str, Type, bool)]| {
+        let mut t = TableDef::new(name).unwrap();
+        for (n, ty, nullable) in cols {
+            t = t
+                .apply(
+                    &Change::AddColumn {
+                        name: (*n).into(),
+                        ty: ty.clone(),
+                        nullable: *nullable,
+                        default: None,
+                    },
+                    true,
+                )
+                .unwrap()
+                .0;
+        }
+        t.set_primary_key(&["k"]).unwrap();
+        db.create_table(t).unwrap();
+    };
+    make("cp", &[("k", Type::I64, false)]);
+    make(
+        "cc",
+        &[
+            ("k", Type::I64, false),
+            ("pk", Type::I64, true),
+            ("tag", Type::Text, true),
+        ],
+    );
+    db.alter_table(
+        "cc",
+        &Change::AddUnique {
+            name: "cc_tag".into(),
+            columns: vec!["tag".into()],
+        },
+    )
+    .unwrap();
+    db.alter_table(
+        "cc",
+        &Change::AddForeignKey {
+            name: "cc_cp".into(),
+            columns: vec!["pk".into()],
+            ref_table: "cp".into(),
+            ref_table_id: 0,
+            ref_pk_types: vec![],
+            on_delete: OnDelete::Cascade,
+        },
+    )
+    .unwrap();
+}
+
+/// Runs only as the child of `a_cascading_delete_survives_a_crash_at_every_commit`.
+#[test]
+fn cascade_workload_child() {
+    let Ok(dir) = std::env::var("POWERDB_FP_DIR") else {
+        return;
+    };
+    use powerdb::types::Value as V;
+    let db = Db::open(&dir, options()).unwrap();
+    cascade_tables(&db);
+    for i in 0..8i64 {
+        db.insert_row("cp", &[("k", V::I64(i))]).unwrap();
+        for j in 0..2i64 {
+            let k = i * 10 + j;
+            db.insert_row(
+                "cc",
+                &[
+                    ("k", V::I64(k)),
+                    ("pk", V::I64(i)),
+                    ("tag", V::Text(format!("t{k}"))),
+                ],
+            )
+            .unwrap();
+        }
+        // the parent and both its children go together, in one commit
+        db.delete_row("cp", &[V::I64(i)]).unwrap();
+    }
+}
+
+#[test]
+fn a_cascading_delete_survives_a_crash_at_every_commit() {
+    for (crashed, nth) in (1..=400u64).enumerate() {
+        let dir = std::env::temp_dir().join(format!("powerdb-fp-{}", new_id()));
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cascade_workload_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("POWERDB_FP_DIR", &dir)
+            .env("POWERDB_FAILPOINT", format!("commit.after_batch:{nth}"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        if status.success() {
+            // the workload ran to its end before the nth commit: every commit has been tried
+            assert!(crashed > 30, "only {crashed} commits were crashed on");
+            let _ = std::fs::remove_dir_all(dir);
+            return;
+        }
+        let db = Db::open(&dir, options()).unwrap_or_else(|e| {
+            panic!("after the crash at commit {nth}: it would not reopen: {e}")
+        });
+        // `verify` finds a child whose parent is gone, an index entry without its row, a row without its entry
+        let r = db.verify(true).unwrap();
+        assert!(
+            r.problems.is_empty(),
+            "after the crash at commit {nth}: {:?}",
+            r.problems
+        );
+        // and a parent that was deleted took its children with it: none are left with no parent
+        let rows = match db.scan_rows("cc", None, 1000) {
+            Ok(rows) => rows,
+            Err(powerdb::Error::NotFound(_)) => vec![], // the crash was during setup: no such table yet
+            Err(e) => panic!("after the crash at commit {nth}: {e}"),
+        };
+        for row in rows {
+            let parent = row
+                .iter()
+                .find(|(n, _)| n == "pk")
+                .and_then(|(_, v)| v.clone());
+            if let Some(p) = parent {
+                assert!(
+                    db.get_row("cp", std::slice::from_ref(&p))
+                        .unwrap()
+                        .is_some(),
+                    "after the crash at commit {nth}: a child refers to the missing parent {p:?}"
+                );
+            }
+        }
+        drop(db);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    panic!("the workload never finished");
 }
