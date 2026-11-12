@@ -279,6 +279,37 @@ Identical content is stored once, however many keys and versions name it, and an
 
 From TypeScript: `db.buckets.create('documents')`, `db.bucket('documents').put('a/b.pdf', bytes)`, `.download(key)`, `.list({ prefix })`, `.versions(key)`, `.restore(key, version)`. The dashboard has a **Files** section with the same operations.
 
+## Typed tables
+
+A **table** has columns with types, a primary key, and optionally constraints and indexes. Tables sit beside collections: the two do not share rows. Tables are for administrators for now (a table has no rules yet), so use an administrator key.
+
+Types: `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64`, `decimal`, `text`, `uuid`, `date`, `time`, `timestamp`, `timestamptz`, `json`, `binary`, `file`, and `array<...>` of these. In JSON, 64-bit integers and decimals are strings (a JavaScript number cannot hold them exactly); a number is also accepted when you send one. Dates are `2026-11-12`, a `timestamptz` needs a zone (`2026-11-12T10:00:00Z`), binary is base64.
+
+```bash
+powerdb table create '{
+  "name": "people",
+  "columns": [
+    {"name": "id", "type": "uuid", "generate": "uuid"},
+    {"name": "name", "type": "text", "nullable": false},
+    {"name": "age", "type": "int32"},
+    {"name": "photo", "type": "file"}
+  ],
+  "primary_key": ["id"],
+  "constraints": [{"name": "adult", "kind": "check", "expr": "age == null || age >= 18"}],
+  "indexes": [{"name": "by_name", "columns": ["name"]}]
+}'
+powerdb table insert people '{"name": "Asha", "age": 31}'
+powerdb table rows people                       # one JSON row per line, in key order
+powerdb table get people 01a1ce95-0c3c-713b-9053-9073ab8846fd
+powerdb table alter people '{"op": "add_column", "name": "nick", "type": "text"}'
+```
+
+Rules worth knowing: a primary key column is required; a column that has a default cannot be set to null; a primary key cannot be changed once the table exists; adding a constraint to a table with rows checks the rows first and refuses if one fails; dropping a table that another table points at is refused. A key of several columns is addressed as a JSON array (`powerdb table get pairs '["x", 1]'`, or `?key=["x",1]` over HTTP).
+
+Over HTTP, `POST /tables/people/rows` takes JSON, or `multipart/form-data` whose first part is `data` (the JSON) and then one part per file, named after its file column. A row returns each file as `{id, size, mime, name, url}`; fetch the `url` with the same credentials (ranges work). To put an object that is already in a bucket into a file column, send `{"photo": {"object": {"bucket": "pics", "key": "cat.jpg"}}}`; the row then holds the file itself, so deleting the object later does not affect the row. In the SDK: `db.tables.create(...)`, `db.table('people').insert(values, { photo: file })`, `.get(key)`, `.update(key, values)`, `.list({ after })`, `.find('by_name', ['Asha'])`.
+
+What is not there yet: SQL, filtering and sorting beyond primary-key order and index lookups, per-table permissions, and editing constraints or indexes in the dashboard.
+
 ## Who can do what
 
 ![The access rules editor](screenshots/dashboard-rules.webp)
@@ -502,6 +533,7 @@ Or put a proxy such as Caddy or nginx in front and start the server with `--trus
 | `powerdb create-key --name N` | Make an API key without starting the server. `--access read\|write\|read-write` (default read), `--collection`, `--admin` (full access, skips rules). |
 | `powerdb bucket create\|ls\|rm\|versioning` | Buckets on a running server. `--url` and `--key` (or `POWERDB_URL`, `POWERDB_KEY`). |
 | `powerdb object put\|get\|ls\|rm\|versions\|restore` | Files in buckets on a running server. `put BUCKET/KEY FILE`, `get BUCKET/KEY [FILE]`, `--version`, `--meta`, `--type`. |
+| `powerdb table ls\|create\|show\|alter\|drop\|rows\|insert\|get\|update\|delete` | Typed tables on a running server; JSON as an argument, `@file.json` or `-`. |
 | `powerdb service ...` | `install`, `uninstall`, `start`, `stop`, `status` for the operating system's service manager. |
 | `powerdb bench` | Measure the storage engine on this machine. |
 
@@ -527,6 +559,10 @@ All paths are under `/api/v1`. Send `authorization: Bearer <key or token>`.
 | `PUT, GET, HEAD, DELETE /buckets/{name}/objects/{key}` | An object. `PUT` takes the file as the request body (`?filename=`, `X-PowerDB-Meta-*` headers); `GET` supports `Range` and `?version=`; `DELETE` takes `?version=`. |
 | `GET /buckets/{name}/objects` | List by `prefix`, with `after` (the previous page's `next`) and `limit`. |
 | `GET /buckets/{name}/versions?key=` , `POST /buckets/{name}/restore` | Versions of a key, newest first; restore one with `{"key": ..., "version": ...}`. |
+| `GET, POST /tables`; `GET, PATCH, DELETE /tables/{name}` | Typed tables (administrators). `PATCH` takes one change, `{"op": "add_column", ...}`; `DELETE` answers `{deleted_rows}`. |
+| `GET, POST /tables/{name}/rows`; `GET, PATCH, DELETE /tables/{name}/rows/{key}` | Rows: JSON or multipart; `?limit`, `?after`; composite keys as `?key=[...]`. |
+| `GET /tables/{name}/rows/{key}/files/{column}` | A file in a row (`?index=` for a file list); supports `Range`. |
+| `GET /tables/{name}/indexes/{index}/rows?values=[...]` | Rows found through an index by its leading values. |
 | `GET, POST /keys`, `DELETE /keys/{id}` | API keys. |
 | `GET, POST /users`, `DELETE /users/{id}` | Accounts. |
 | `GET, POST /maintenance/backups` | List or take backups. |

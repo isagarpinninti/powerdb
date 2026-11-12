@@ -9,6 +9,7 @@ pub mod oauth;
 mod objects;
 mod query;
 mod records;
+mod tables;
 mod ui;
 mod upload;
 
@@ -329,6 +330,29 @@ pub fn router(state: AppState) -> Router {
             "/buckets/{name}/objects/{*key}",
             get(objects::get_object).delete(objects::delete_object),
         )
+        .route(
+            "/tables",
+            get(tables::list_tables).post(tables::create_table),
+        )
+        .route(
+            "/tables/{name}",
+            get(tables::get_table)
+                .patch(tables::alter_table)
+                .delete(tables::drop_table),
+        )
+        .route("/tables/{name}/rows", get(tables::list_rows))
+        .route(
+            "/tables/{name}/rows/{key}",
+            get(tables::get_row).delete(tables::delete_row),
+        )
+        .route(
+            "/tables/{name}/rows/{key}/files/{column}",
+            get(tables::download),
+        )
+        .route(
+            "/tables/{name}/indexes/{index}/rows",
+            get(tables::index_rows),
+        )
         .route("/keys", get(admin::list_keys).post(admin::create_key))
         .route("/keys/{id}", axum::routing::delete(admin::revoke_key))
         .route("/users", get(admin::list_users).post(admin::create_user))
@@ -357,6 +381,11 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/collections/{name}/records/{id}",
             axum::routing::patch(records::update),
+        )
+        .route("/tables/{name}/rows", post(tables::insert_row))
+        .route(
+            "/tables/{name}/rows/{key}",
+            axum::routing::patch(tables::update_row),
         )
         // an object is the raw request body, streamed: no size cap here, the upload limit is enforced as bytes arrive
         .route(

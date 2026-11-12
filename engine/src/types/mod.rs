@@ -6,6 +6,7 @@
 
 pub mod convert;
 pub mod decimal;
+pub mod json;
 pub mod key;
 pub mod row;
 pub mod schema;

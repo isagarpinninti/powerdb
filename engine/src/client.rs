@@ -39,6 +39,11 @@ fn encode_key(k: &str) -> String {
         .collect()
 }
 
+/// Percent-encodes one path or query component.
+pub fn encode_component(s: &str) -> String {
+    encode_q(s)
+}
+
 fn encode_q(s: &str) -> String {
     encode_key(s).replace('/', "%2F")
 }
@@ -108,6 +113,11 @@ impl Client {
         }
         let text = resp.into_body().read_to_string().unwrap_or_default();
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// Any JSON call (the table commands pass JSON through as it is).
+    pub fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
+        self.json_call(method, path, body)
     }
 
     // ---- buckets ----

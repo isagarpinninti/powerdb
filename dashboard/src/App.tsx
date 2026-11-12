@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { BucketInfo, CollectionDef } from '@sdk';
+import type { BucketInfo, CollectionDef, TableInfo } from '@sdk';
 import { Logo } from './Logo';
 import { applyTheme, readTheme } from './theme';
 import { DESKTOP_ORIGINS, db, embedded, useSession } from './session';
@@ -9,10 +9,11 @@ import { BucketView, NewBucket } from './views/Files';
 import { Keys } from './views/Keys';
 import { Login } from './views/Login';
 import { NewCollection } from './views/NewCollection';
+import { NewTable, TableView } from './views/Tables';
 import { System } from './views/System';
 import { Users } from './views/Users';
 
-export type Nav = { page: 'collection'; name: string } | { page: 'bucket'; name: string } | { page: 'new' } | { page: 'users' } | { page: 'keys' } | { page: 'system' } | { page: 'home' };
+export type Nav = { page: 'collection'; name: string } | { page: 'bucket'; name: string } | { page: 'table'; name: string } | { page: 'new' } | { page: 'users' } | { page: 'keys' } | { page: 'system' } | { page: 'home' };
 
 function useTheme() {
   const [dark, setDark] = useState(() => readTheme() === 'dark');
@@ -30,14 +31,17 @@ export function App() {
   const [nav, setNav] = useState<Nav>({ page: 'home' });
   const [collections, setCollections] = useState<CollectionDef[] | null>(null);
   const [buckets, setBuckets] = useState<BucketInfo[] | null>(null);
+  const [tables, setTables] = useState<TableInfo[] | null>(null);
   const [newBucket, setNewBucket] = useState(false);
+  const [newTable, setNewTable] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [cols, bks] = await Promise.all([db.admin.collections.list(), db.buckets.list()]);
+      const [cols, bks, tbs] = await Promise.all([db.admin.collections.list(), db.buckets.list(), db.tables.list()]);
       setCollections(cols);
       setBuckets(bks);
+      setTables(tbs);
       setError(null);
     } catch (e) {
       setError(e);
@@ -97,6 +101,18 @@ export function App() {
             ))}
           </div>
           <div>
+            <div className="mb-1 flex items-center justify-between px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
+              Tables
+              <button className="rounded px-1.5 text-base leading-none text-muted hover:bg-raised" title="New table" aria-label="New table" onClick={() => setNewTable(true)}>+</button>
+            </div>
+            {tables?.length === 0 && <p className="px-3 py-2 text-xs text-muted">No tables yet.</p>}
+            {tables?.map((t) => (
+              <button key={t.name} className={item(nav.page === 'table' && nav.name === t.name)} onClick={() => setNav({ page: 'table', name: t.name })}>
+                <span className="truncate">{t.name}</span>
+              </button>
+            ))}
+          </div>
+          <div>
             <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">Administration</div>
             <button className={item(nav.page === 'users')} onClick={() => setNav({ page: 'users' })}>Users</button>
             <button className={item(nav.page === 'keys')} onClick={() => setNav({ page: 'keys' })}>API keys</button>
@@ -120,12 +136,14 @@ export function App() {
           {nav.page === 'new' && <NewCollection onCreated={async (name) => { await refresh(); setNav({ page: 'collection', name }); }} />}
           {nav.page === 'collection' && <CollectionView key={nav.name} name={nav.name} onChanged={refresh} onDropped={async () => { await refresh(); setNav({ page: 'home' }); }} />}
           {nav.page === 'bucket' && <BucketView key={nav.name} name={nav.name} onChanged={refresh} onDropped={async () => { await refresh(); setNav({ page: 'home' }); }} />}
+          {nav.page === 'table' && <TableView key={nav.name} name={nav.name} onDropped={async () => { await refresh(); setNav({ page: 'home' }); }} />}
           {nav.page === 'users' && <Users />}
           {nav.page === 'keys' && <Keys collections={collections ?? []} />}
           {nav.page === 'system' && <System />}
         </div>
       </main>
       {newBucket && <NewBucket onClose={() => setNewBucket(false)} onCreated={async (name) => { setNewBucket(false); await refresh(); setNav({ page: 'bucket', name }); }} />}
+      {newTable && <NewTable onClose={() => setNewTable(false)} onCreated={async (name) => { setNewTable(false); await refresh(); setNav({ page: 'table', name }); }} />}
     </div>
   );
 }

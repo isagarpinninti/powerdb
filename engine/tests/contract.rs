@@ -1016,3 +1016,174 @@ async fn the_bucket_and_object_routes_are_unchanged() {
         .await;
     c.pin("DELETE /buckets/{name}", &r, 204, "");
 }
+
+#[tokio::test]
+async fn the_table_routes_are_unchanged() {
+    let dir = Dir(std::env::temp_dir().join(format!("powerdb-contract-{}", new_id())));
+    let (st, boot) = server::build_state(
+        &dir.0,
+        Options {
+            durability: Durability::Never,
+            ..Options::default()
+        },
+        Config::default(),
+    )
+    .unwrap();
+    let admin = boot
+        .admin_key
+        .expect("the first run mints an administrator key");
+    let admin = admin.as_str();
+    let mut c = Ctx {
+        app: api::router(st),
+        printing: std::env::var("POWERDB_CONTRACT_PRINT").is_ok(),
+    };
+    let r = c.get("/tables", None).await;
+    c.pin(
+        "GET /tables (no credentials)",
+        &r,
+        401,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .json(
+            "POST",
+            "/tables",
+            Some(admin),
+            serde_json::json!({
+                "name": "people",
+                "columns": [
+                    {"name": "id", "type": "uuid", "generate": "uuid"},
+                    {"name": "name", "type": "text", "nullable": false},
+                    {"name": "age", "type": "int32", "default": 18}
+                ],
+                "primary_key": ["id"],
+                "constraints": [{"name": "adult", "kind": "check", "expr": "age >= 18"}],
+                "indexes": [{"name": "by_name", "columns": ["name"]}]
+            }),
+        )
+        .await;
+    c.pin("POST /tables", &r, 201, "table:object,table.columns:array,table.constraints:array,table.encrypt:bool,table.indexes:array,table.name:string,table.primary_key:array,table.version:number");
+    let r = c
+        .json(
+            "POST",
+            "/tables",
+            Some(admin),
+            serde_json::json!({"name": "people", "columns": [{"name": "k", "type": "text", "nullable": false}], "primary_key": ["k"]}),
+        )
+        .await;
+    c.pin(
+        "POST /tables (duplicate)",
+        &r,
+        409,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c.get("/tables", Some(admin)).await;
+    c.pin("GET /tables", &r, 200, "items:array,items[].columns:array,items[].constraints:array,items[].encrypt:bool,items[].indexes:array,items[].name:string,items[].primary_key:array,items[].version:number");
+    let r = c.get("/tables/people", Some(admin)).await;
+    c.pin("GET /tables/{name}", &r, 200, "rows:number,table:object,table.columns:array,table.constraints:array,table.encrypt:bool,table.indexes:array,table.name:string,table.primary_key:array,table.version:number");
+    let r = c.get("/tables/nope", Some(admin)).await;
+    c.pin(
+        "GET /tables/{name} (missing)",
+        &r,
+        404,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c
+        .json(
+            "PATCH",
+            "/tables/people",
+            Some(admin),
+            serde_json::json!({"op": "add_column", "name": "nick", "type": "text"}),
+        )
+        .await;
+    c.pin("PATCH /tables/{name}", &r, 200, "table:object,table.columns:array,table.constraints:array,table.encrypt:bool,table.indexes:array,table.name:string,table.primary_key:array,table.version:number");
+    let r = c
+        .json(
+            "POST",
+            "/tables/people/rows",
+            Some(admin),
+            serde_json::json!({"name": "Asha"}),
+        )
+        .await;
+    c.pin(
+        "POST /tables/{name}/rows",
+        &r,
+        201,
+        "row:object,row.age:number,row.id:string,row.name:string",
+    );
+    let id = serde_json::from_slice::<Value>(&r.body).unwrap()["row"]["id"]
+        .as_str()
+        .unwrap_or("x")
+        .to_string();
+    let r = c
+        .json(
+            "POST",
+            "/tables/people/rows",
+            Some(admin),
+            serde_json::json!({"name": "Kid", "age": 3}),
+        )
+        .await;
+    c.pin(
+        "POST rows (check fails)",
+        &r,
+        400,
+        "error:object,error.code:string,error.message:string",
+    );
+    let r = c.get("/tables/people/rows", Some(admin)).await;
+    c.pin(
+        "GET /tables/{name}/rows",
+        &r,
+        200,
+        "items:array,items[].age:number,items[].id:string,items[].name:string,limit:number",
+    );
+    let r = c
+        .get(&format!("/tables/people/rows/{id}"), Some(admin))
+        .await;
+    c.pin(
+        "GET row",
+        &r,
+        200,
+        "row:object,row.age:number,row.id:string,row.name:string",
+    );
+    let r = c
+        .json(
+            "PATCH",
+            &format!("/tables/people/rows/{id}"),
+            Some(admin),
+            serde_json::json!({"nick": "A"}),
+        )
+        .await;
+    c.pin(
+        "PATCH row",
+        &r,
+        200,
+        "row:object,row.age:number,row.id:string,row.name:string,row.nick:string",
+    );
+    let r = c
+        .get(
+            "/tables/people/indexes/by_name/rows?values=%5B%22Asha%22%5D",
+            Some(admin),
+        )
+        .await;
+    c.pin(
+        "GET index rows",
+        &r,
+        200,
+        "items:array,items[].id:string,items[].name:string,limit:number",
+    );
+    let r = c
+        .call(
+            "DELETE",
+            &format!("/tables/people/rows/{id}"),
+            Some(admin),
+            None,
+            vec![],
+            &[],
+        )
+        .await;
+    c.pin("DELETE row", &r, 204, "");
+    let r = c
+        .call("DELETE", "/tables/people", Some(admin), None, vec![], &[])
+        .await;
+    c.pin("DELETE /tables/{name}", &r, 200, "deleted_rows:number");
+}

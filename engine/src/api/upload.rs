@@ -63,7 +63,7 @@ fn mp_err(e: axum::extract::multipart::MultipartError) -> ApiError {
     )
 }
 
-fn clean_name(n: &str) -> Option<String> {
+pub(super) fn clean_name(n: &str) -> Option<String> {
     let base = n.rsplit(['/', '\\']).next().unwrap_or("");
     let s: String = base.chars().filter(|c| !c.is_control()).take(200).collect();
     if s.trim().is_empty() { None } else { Some(s) }
@@ -368,6 +368,79 @@ pub async fn stage_stream(
     }
     if let Some(e) = transport_error {
         return Err(e); // a body cut short must not become a (shorter) object
+    }
+    let mut p = result.map_err(ApiError::from)?;
+    if let Some(m) = shared.mime.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        p.mime = m;
+    }
+    Ok(p)
+}
+
+/// Stages one multipart file part for a row of a typed table, through the same streaming path as a collection's file field: the first bytes are checked
+/// against the declared type before anything is written, and the size limit is enforced as bytes arrive.
+pub async fn stage_table_part(
+    st: &AppState,
+    table: &str,
+    column: &str,
+    mime: String,
+    filename: Option<String>,
+    part: &mut Field<'_>,
+) -> Result<PendingFile, ApiError> {
+    let (tx, rx) = mpsc::channel::<Bytes>(8);
+    let shared = Arc::new(Shared::default());
+    let reader = UploadReader {
+        rx,
+        declared: mime.clone(),
+        max: st.cfg.max_upload_bytes,
+        total: 0,
+        buf: Bytes::new(),
+        pos: 0,
+        primed: false,
+        shared: shared.clone(),
+    };
+    let db = st.db.clone();
+    let table = table.to_string();
+    let declared = mime.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        db.stage_table_file(&table, &declared, filename.as_deref(), reader)
+    });
+    let mut transport_error = None;
+    loop {
+        match part.chunk().await {
+            Ok(Some(c)) => {
+                if tx.send(c).await.is_err() {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                transport_error = Some(mp_err(e));
+                break;
+            }
+        }
+    }
+    drop(tx);
+    let result = job
+        .await
+        .map_err(|_| ApiError::internal("upload task failed"))?;
+    if let Some((status, msg)) = shared
+        .failure
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        return Err(ApiError::new(
+            status,
+            if status == StatusCode::PAYLOAD_TOO_LARGE {
+                "too_large"
+            } else {
+                "invalid"
+            },
+            format!("\"{column}\": {msg}"),
+        ));
+    }
+    if let Some(e) = transport_error {
+        return Err(e);
     }
     let mut p = result.map_err(ApiError::from)?;
     if let Some(m) = shared.mime.lock().unwrap_or_else(|e| e.into_inner()).take() {

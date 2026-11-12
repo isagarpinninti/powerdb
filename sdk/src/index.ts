@@ -78,6 +78,8 @@ export class PowerDB {
   readonly admin: Admin;
   /** Buckets and the objects (files) in them: `db.buckets.create('docs')`, `db.bucket('docs').put('a/b.pdf', bytes)`. */
   readonly buckets: Buckets;
+  /** Typed tables (administrators only): `db.tables.create({...})`, `db.table('people').insert({...})`. */
+  readonly tables: Tables;
 
   /** `key` is an API key (`pdb_live_...`) or a session token from `auth.login`. */
   constructor(baseUrl: string, key?: string) {
@@ -86,6 +88,12 @@ export class PowerDB {
     this.auth = new Auth(this);
     this.admin = new Admin(this);
     this.buckets = new Buckets(this);
+    this.tables = new Tables(this);
+  }
+
+  /** A typed table to read and write rows in. It does not check that the table exists until you use it. */
+  table<T extends Fields = Fields>(name: string): TableHandle<T> {
+    return new TableHandle<T>(this, name);
   }
 
   /** A bucket to read and write objects in. It does not check that the bucket exists until you use it. */
@@ -639,5 +647,196 @@ export class BucketHandle {
   /** Makes an old version the newest again (as a new version sharing its data). Only in a bucket with versioning. */
   async restore(key: string, version: string): Promise<ObjectInfo> {
     return (await this.db.json<{ object: ObjectInfo }>('POST', `/api/v1/buckets/${encodeURIComponent(this.name)}/restore`, { key, version })).object;
+  }
+}
+
+
+// ---- typed tables ----
+
+/**
+ * Column types: bool, int8..int64, uint8..uint64, float32, float64, decimal, text, uuid, date, time, timestamp, timestamptz, json, binary, file,
+ * and array<...> of these. 64-bit integers and decimals travel as strings (a JS number cannot hold them); you may send either.
+ */
+export type ColumnType = string;
+
+export interface ColumnSpec {
+  name: string;
+  type: ColumnType;
+  /** Default true, except for primary key columns. */
+  nullable?: boolean;
+  /** Used when a row leaves the column out. */
+  default?: unknown;
+  /** Fill the column when a row leaves it out: 'uuid', 'now' or 'sequence'. */
+  generate?: 'uuid' | 'now' | 'sequence';
+}
+
+export type ConstraintSpec =
+  | { name: string; kind: 'unique'; columns: string[] }
+  | { name: string; kind: 'check'; expr: string }
+  | { name: string; kind: 'foreign_key'; columns: string[]; ref_table: string; on_delete?: 'restrict' | 'cascade' | 'set_null' };
+
+export interface TableSpec {
+  name: string;
+  columns: ColumnSpec[];
+  primary_key: string[];
+  encrypt?: boolean;
+  constraints?: ConstraintSpec[];
+  indexes?: { name: string; columns: string[] }[];
+}
+
+export interface TableInfo extends Required<Pick<TableSpec, 'name' | 'primary_key' | 'encrypt'>> {
+  version: number;
+  columns: ColumnSpec[];
+  constraints: ConstraintSpec[];
+  indexes: { name: string; columns: string[] }[];
+}
+
+/** One schema change, sent to `tables.alter`. */
+export type TableChange =
+  | ({ op: 'add_column' } & ColumnSpec)
+  | { op: 'add_generated_column'; name: string; type: ColumnType; generate: 'uuid' | 'now' | 'sequence'; nullable?: boolean }
+  | { op: 'drop_column'; name: string }
+  | { op: 'rename_column'; from: string; to: string }
+  | { op: 'widen_column' | 'change_type'; name: string; to: ColumnType }
+  | { op: 'set_nullable' | 'set_not_null'; name: string }
+  | { op: 'add_unique'; name: string; columns: string[] }
+  | { op: 'add_check'; name: string; expr: string }
+  | { op: 'add_foreign_key'; name: string; columns: string[]; ref_table: string; on_delete?: 'restrict' | 'cascade' | 'set_null' }
+  | { op: 'drop_constraint' | 'drop_index'; name: string }
+  | { op: 'add_index'; name: string; columns: string[] };
+
+/** A file held by a row. `url` is relative to the server; fetch it with the same credentials (`table.download`). */
+export interface TableFile {
+  id: string;
+  size: number;
+  mime: string;
+  name?: string;
+  url: string;
+}
+
+/** A file to attach on a write: an object that is stored in a bucket (its content is shared, not copied), or a file a row already holds. */
+export type FileRef = { object: { bucket: string; key: string; version?: string } } | { id: string; size: number; mime?: string; name?: string };
+
+export interface RowPage<T extends Fields = Fields> {
+  items: T[];
+  /** Pass as `after` for the next page; undefined on the last page. */
+  next?: string;
+  limit: number;
+}
+
+export interface RowListOptions {
+  limit?: number;
+  after?: string;
+}
+
+/** Files uploaded together with a row, by column. A list column takes several. */
+export type RowUploads = Record<string, Blob | Blob[]>;
+
+class Tables {
+  constructor(private readonly db: PowerDB) {}
+
+  async list(): Promise<TableInfo[]> {
+    return (await this.db.json<{ items: TableInfo[] }>('GET', '/api/v1/tables')).items;
+  }
+
+  /** Creates a table. Constraints and indexes are applied with it: if one is refused, no table is left behind. */
+  async create(spec: TableSpec): Promise<TableInfo> {
+    return (await this.db.json<{ table: TableInfo }>('POST', '/api/v1/tables', spec)).table;
+  }
+
+  async get(name: string): Promise<{ table: TableInfo; rows: number }> {
+    return this.db.json('GET', `/api/v1/tables/${encodeURIComponent(name)}`);
+  }
+
+  /** Applies one schema change; rows are never rewritten for a change that does not need it. */
+  async alter(name: string, change: TableChange): Promise<TableInfo> {
+    return (await this.db.json<{ table: TableInfo }>('PATCH', `/api/v1/tables/${encodeURIComponent(name)}`, change)).table;
+  }
+
+  /** Deletes the table and all its rows; refused while another table points at it. Returns how many rows went. */
+  async drop(name: string): Promise<number> {
+    return (await this.db.json<{ deleted_rows: number }>('DELETE', `/api/v1/tables/${encodeURIComponent(name)}`)).deleted_rows;
+  }
+}
+
+/** A key as given to `get`, `update` and `delete`: the value for a one-column key, an array of values for any key. */
+export type RowKey = string | number | boolean | unknown[];
+
+export class TableHandle<T extends Fields = Fields> {
+  constructor(
+    private readonly db: PowerDB,
+    readonly name: string,
+  ) {}
+
+  private base(): string {
+    return `/api/v1/tables/${encodeURIComponent(this.name)}`;
+  }
+
+  private rowPath(key: RowKey): string {
+    if (Array.isArray(key)) return `${this.base()}/rows/_?key=${encodeURIComponent(JSON.stringify(key))}`;
+    return `${this.base()}/rows/${encodeURIComponent(String(key))}`;
+  }
+
+  private body(values: Fields, files?: RowUploads): unknown {
+    if (!files || Object.keys(files).length === 0) return values;
+    const form = new FormData();
+    form.append('data', new Blob([JSON.stringify(values)], { type: 'application/json' }));
+    for (const [column, f] of Object.entries(files)) for (const blob of Array.isArray(f) ? f : [f]) form.append(column, blob, (blob as File).name ?? column);
+    return form;
+  }
+
+  /** Adds a row and returns it as stored (generated values filled in). `files` uploads into file columns with it. */
+  async insert(values: Fields, files?: RowUploads): Promise<T> {
+    return (await this.db.json<{ row: T }>('POST', `${this.base()}/rows`, this.body(values, files))).row;
+  }
+
+  async get(key: RowKey): Promise<T> {
+    return (await this.db.json<{ row: T }>('GET', this.rowPath(key))).row;
+  }
+
+  /** Changes the columns you name; the rest stay. `null` clears a nullable column. */
+  async update(key: RowKey, values: Fields, files?: RowUploads): Promise<T> {
+    return (await this.db.json<{ row: T }>('PATCH', this.rowPath(key), this.body(values, files))).row;
+  }
+
+  async delete(key: RowKey): Promise<void> {
+    await this.db.request('DELETE', this.rowPath(key));
+  }
+
+  /** One page of rows in primary key order. */
+  async list(opts: RowListOptions = {}): Promise<RowPage<T>> {
+    const p = new URLSearchParams();
+    if (opts.limit) p.set('limit', String(opts.limit));
+    if (opts.after) p.set('after', opts.after);
+    const q = p.toString();
+    const r = await this.db.json<{ items: T[]; next?: string | null; limit: number }>('GET', `${this.base()}/rows${q ? '?' + q : ''}`);
+    return { items: r.items, next: r.next ?? undefined, limit: r.limit };
+  }
+
+  /** Every row, page by page. */
+  async *rows(pageSize = 500): AsyncGenerator<T> {
+    let after: string | undefined;
+    do {
+      const page = await this.list({ limit: pageSize, after });
+      yield* page.items;
+      after = page.next;
+    } while (after);
+  }
+
+  /** Rows found through an index (or a unique or foreign key constraint) by its leading column values. */
+  async find(index: string, values: unknown[], opts: RowListOptions = {}): Promise<RowPage<T>> {
+    const p = new URLSearchParams({ values: JSON.stringify(values) });
+    if (opts.limit) p.set('limit', String(opts.limit));
+    if (opts.after) p.set('after', opts.after);
+    const r = await this.db.json<{ items: T[]; next?: string | null; limit: number }>(
+      'GET',
+      `${this.base()}/indexes/${encodeURIComponent(index)}/rows?${p.toString()}`,
+    );
+    return { items: r.items, next: r.next ?? undefined, limit: r.limit };
+  }
+
+  /** The bytes of a stored file; use `file.url` from a row. */
+  async download(file: TableFile): Promise<Uint8Array> {
+    return new Uint8Array(await (await this.db.raw('GET', file.url)).arrayBuffer());
   }
 }

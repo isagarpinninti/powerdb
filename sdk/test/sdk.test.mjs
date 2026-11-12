@@ -259,3 +259,40 @@ test('objects: an ordinary user and an anonymous caller are refused', async () =
   await user.auth.login('plain@example.com', 'another long passphrase');
   await assert.rejects(user.buckets.list(), (e) => e instanceof PowerDBError && e.status === 403);
 });
+
+test('typed tables: create, insert with generated ids and a file, page, find, alter, drop', async () => {
+  const t = await admin.tables.create({
+    name: 'sdk_people',
+    columns: [
+      { name: 'id', type: 'uuid', generate: 'uuid' },
+      { name: 'name', type: 'text', nullable: false },
+      { name: 'age', type: 'int32' },
+      { name: 'big', type: 'int64' },
+      { name: 'photo', type: 'file' },
+    ],
+    primary_key: ['id'],
+    constraints: [{ name: 'adult', kind: 'check', expr: 'age == null || age >= 18' }],
+    indexes: [{ name: 'by_name', columns: ['name'] }],
+  });
+  assert.deepEqual(t.primary_key, ['id']);
+  const people = admin.table('sdk_people');
+  const a = await people.insert({ name: 'Asha', age: 30, big: '9007199254740993' });
+  assert.match(a.id, /^[0-9a-f-]{36}$/);
+  assert.equal(a.big, '9007199254740993', '64-bit integers keep every digit');
+  const body = png(2000);
+  const b = await people.insert({ name: 'Ben' }, { photo: new File([body], 'me.png', { type: 'image/png' }) });
+  assert.equal(b.photo.size, body.length);
+  assert.deepEqual(Buffer.from(await people.download(b.photo)).subarray(0, 8), body.subarray(0, 8));
+  await assert.rejects(people.insert({ name: 'Kid', age: 3 }), (e) => e instanceof PowerDBError && e.status === 400);
+  assert.equal((await people.get(a.id)).name, 'Asha');
+  assert.equal((await people.update(a.id, { age: null })).age, null);
+  assert.equal((await people.find('by_name', ['Ben'])).items.length, 1);
+  const all = [];
+  for await (const r of people.rows(1)) all.push(r.name);
+  assert.equal(all.length, 2);
+  await admin.tables.alter('sdk_people', { op: 'add_column', name: 'nick', type: 'text' });
+  assert.equal((await admin.tables.get('sdk_people')).table.columns.length, 6);
+  await people.delete(a.id);
+  await assert.rejects(people.get(a.id), (e) => e.status === 404);
+  assert.equal(await admin.tables.drop('sdk_people'), 1);
+});

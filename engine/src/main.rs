@@ -145,6 +145,11 @@ enum Cmd {
         #[command(subcommand)]
         action: ObjectCmd,
     },
+    /// Typed tables on a running server: create, inspect, change, and read and write rows (JSON in, JSON out).
+    Table {
+        #[command(subcommand)]
+        action: TableCmd,
+    },
     /// Measure the storage engine on this machine.
     Bench {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -196,6 +201,83 @@ enum BucketCmd {
     },
 }
 
+/// JSON given on the command line, or `@file` to read it from a file, or `-` for standard input.
+#[derive(Subcommand)]
+enum TableCmd {
+    /// List the tables.
+    Ls {
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Create a table from a JSON definition: {"name", "columns": [{"name","type"}], "primary_key": [...], "constraints", "indexes"}.
+    Create {
+        /// The definition as JSON, `@file.json`, or `-` for standard input.
+        spec: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Show a table's definition and row count.
+    Show {
+        name: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Apply one schema change, e.g. '{"op":"add_column","name":"nick","type":"text"}'.
+    Alter {
+        name: String,
+        change: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Delete a table and all its rows.
+    Drop {
+        name: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// List rows in primary key order, one JSON object per line.
+    Rows {
+        name: String,
+        /// Rows per request (1 to 1000).
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Stop after this many rows in all.
+        #[arg(long)]
+        max: Option<usize>,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Add a row from JSON.
+    Insert {
+        name: String,
+        row: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Show one row. KEY is the primary key value, or a JSON array for a key of several columns.
+    Get {
+        name: String,
+        row_key: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Change the columns named in the JSON of one row.
+    Update {
+        name: String,
+        row_key: String,
+        row: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+    /// Delete one row.
+    Delete {
+        name: String,
+        row_key: String,
+        #[command(flatten)]
+        remote: Remote,
+    },
+}
+
 #[derive(Subcommand)]
 enum ObjectCmd {
     /// Upload a file as BUCKET/KEY (`-` reads standard input).
@@ -213,6 +295,7 @@ enum ObjectCmd {
         remote: Remote,
     },
     /// Download BUCKET/KEY to a file (default: its last name in the current folder; `-` writes to standard output).
+    #[command(disable_version_flag = true)]
     Get {
         path: String,
         to: Option<PathBuf>,
@@ -230,6 +313,7 @@ enum ObjectCmd {
         remote: Remote,
     },
     /// Delete BUCKET/KEY. In a bucket with versioning this hides it; add --version to remove one version for good.
+    #[command(disable_version_flag = true)]
     Rm {
         path: String,
         #[arg(long)]
@@ -244,6 +328,7 @@ enum ObjectCmd {
         remote: Remote,
     },
     /// Make an old version of BUCKET/KEY the newest again.
+    #[command(disable_version_flag = true)]
     Restore {
         path: String,
         #[arg(long)]
@@ -393,6 +478,181 @@ fn bucket_command(action: BucketCmd) -> i32 {
             BucketCmd::Versioning { name, remote } => {
                 client(remote)?.bucket_versioning(&name)?;
                 println!("Versioning is on for {name}");
+            }
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => fail(e),
+    }
+}
+
+fn json_arg(s: &str) -> powerdb::Result<serde_json::Value> {
+    let text = if s == "-" {
+        let mut t = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut t)
+            .map_err(|e| powerdb::Error::Invalid(format!("could not read standard input: {e}")))?;
+        t
+    } else if let Some(path) = s.strip_prefix('@') {
+        std::fs::read_to_string(path)
+            .map_err(|e| powerdb::Error::Invalid(format!("could not read {path}: {e}")))?
+    } else {
+        s.to_string()
+    };
+    serde_json::from_str(&text)
+        .map_err(|e| powerdb::Error::Invalid(format!("that is not valid JSON: {e}")))
+}
+
+/// The address of a row: a key of several columns is a JSON array, a single value is used as it is.
+fn row_path(table: &str, key: &str) -> String {
+    let enc = |s: &str| powerdb::client::encode_component(s);
+    if key.trim_start().starts_with('[') {
+        format!("/tables/{}/rows/_?key={}", enc(table), enc(key))
+    } else {
+        format!("/tables/{}/rows/{}", enc(table), enc(key))
+    }
+}
+
+fn table_command(action: TableCmd) -> i32 {
+    let run = || -> powerdb::Result<()> {
+        let show = |v: &serde_json::Value| {
+            println!("{}", serde_json::to_string_pretty(v).unwrap_or_default())
+        };
+        match action {
+            TableCmd::Ls { remote } => {
+                let v = client(remote)?.call("GET", "/tables", None)?;
+                let items = v["items"].as_array().cloned().unwrap_or_default();
+                if items.is_empty() {
+                    println!("No tables.");
+                }
+                for t in items {
+                    let cols: Vec<String> = t["columns"]
+                        .as_array()
+                        .map(|c| {
+                            c.iter()
+                                .map(|c| {
+                                    format!(
+                                        "{} {}",
+                                        c["name"].as_str().unwrap_or(""),
+                                        c["type"].as_str().unwrap_or("")
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    println!(
+                        "{:<24} {}",
+                        t["name"].as_str().unwrap_or(""),
+                        cols.join(", ")
+                    );
+                }
+            }
+            TableCmd::Create { spec, remote } => {
+                let v = client(remote)?.call("POST", "/tables", Some(json_arg(&spec)?))?;
+                println!(
+                    "Created table {}",
+                    v["table"]["name"].as_str().unwrap_or("")
+                );
+            }
+            TableCmd::Show { name, remote } => {
+                let v = client(remote)?.call(
+                    "GET",
+                    &format!("/tables/{}", powerdb::client::encode_component(&name)),
+                    None,
+                )?;
+                show(&v);
+            }
+            TableCmd::Alter {
+                name,
+                change,
+                remote,
+            } => {
+                let v = client(remote)?.call(
+                    "PATCH",
+                    &format!("/tables/{}", powerdb::client::encode_component(&name)),
+                    Some(json_arg(&change)?),
+                )?;
+                println!(
+                    "Changed {name}; it is now at version {}",
+                    v["table"]["version"]
+                );
+            }
+            TableCmd::Drop { name, remote } => {
+                let v = client(remote)?.call(
+                    "DELETE",
+                    &format!("/tables/{}", powerdb::client::encode_component(&name)),
+                    None,
+                )?;
+                println!("Deleted table {name} and {} row(s)", v["deleted_rows"]);
+            }
+            TableCmd::Rows {
+                name,
+                limit,
+                max,
+                remote,
+            } => {
+                let c = client(remote)?;
+                let mut after: Option<String> = None;
+                let mut shown = 0usize;
+                'pages: loop {
+                    let mut path = format!(
+                        "/tables/{}/rows?limit={limit}",
+                        powerdb::client::encode_component(&name)
+                    );
+                    if let Some(a) = &after {
+                        path.push_str(&format!("&after={}", powerdb::client::encode_component(a)));
+                    }
+                    let v = c.call("GET", &path, None)?;
+                    for r in v["items"].as_array().cloned().unwrap_or_default() {
+                        if max.is_some_and(|m| shown >= m) {
+                            break 'pages;
+                        }
+                        println!("{r}");
+                        shown += 1;
+                    }
+                    match v["next"].as_str() {
+                        Some(n) => after = Some(n.to_string()),
+                        None => break,
+                    }
+                }
+            }
+            TableCmd::Insert { name, row, remote } => {
+                let v = client(remote)?.call(
+                    "POST",
+                    &format!("/tables/{}/rows", powerdb::client::encode_component(&name)),
+                    Some(json_arg(&row)?),
+                )?;
+                show(&v["row"]);
+            }
+            TableCmd::Get {
+                name,
+                row_key,
+                remote,
+            } => {
+                let v = client(remote)?.call("GET", &row_path(&name, &row_key), None)?;
+                show(&v["row"]);
+            }
+            TableCmd::Update {
+                name,
+                row_key,
+                row,
+                remote,
+            } => {
+                let v = client(remote)?.call(
+                    "PATCH",
+                    &row_path(&name, &row_key),
+                    Some(json_arg(&row)?),
+                )?;
+                show(&v["row"]);
+            }
+            TableCmd::Delete {
+                name,
+                row_key,
+                remote,
+            } => {
+                client(remote)?.call("DELETE", &row_path(&name, &row_key), None)?;
+                println!("Deleted the row");
             }
         }
         Ok(())
@@ -564,6 +824,9 @@ async fn main() {
             .await
             .unwrap_or(1),
         Cmd::Object { action } => tokio::task::spawn_blocking(move || object_command(action))
+            .await
+            .unwrap_or(1),
+        Cmd::Table { action } => tokio::task::spawn_blocking(move || table_command(action))
             .await
             .unwrap_or(1),
         Cmd::Bench { args } => tokio::task::spawn_blocking(move || bench::run(&args))
