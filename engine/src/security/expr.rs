@@ -522,7 +522,10 @@ fn resolve(at: bool, parts: &[String], c: &Ctx<'_>) -> Value {
     let Some(head) = parts.first() else {
         return Value::Null;
     };
+    // A real field wins over the record's own `id`, `collection` and timestamps. (A collection cannot have a field with one of those names, so for
+    // collections nothing changes; a typed table can have a column called `id`, and a CHECK on it must read that column.)
     let first = match head.as_str() {
+        name if r.fields.contains_key(name) => r.fields[name].clone(),
         "id" => Value::String(r.id.clone()),
         "collection" => Value::String(r.collection.clone()),
         "created_at" => Value::from(r.created_at),

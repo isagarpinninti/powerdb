@@ -448,6 +448,39 @@ fn check_constraints_reject_rows_that_fail_them() {
     clean(&db);
 }
 
+/// Regression: a column named `id` is the commonest primary key there is, and the expression language reads a bare `id` as the record's own id,
+/// which for a table row is empty: a check on `id` rejected every row.
+#[test]
+fn a_check_can_read_a_column_called_id() {
+    let d = Dir::new();
+    let db = open(&d);
+    make(
+        &db,
+        "things",
+        &[("id", Type::I64, false), ("name", Type::Text, true)],
+        &["id"],
+    );
+    check(&db, "things", "positive_id", "id > 0").unwrap();
+    ins(&db, "things", &[("id", i(5))]).unwrap();
+    assert!(matches!(
+        ins(&db, "things", &[("id", i(-1))]),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        ins(&db, "things", &[("id", i(0))]),
+        Err(Error::Invalid(_))
+    ));
+    // the same through a table that already has rows
+    make(&db, "more", &[("id", Type::I64, false)], &["id"]);
+    ins(&db, "more", &[("id", i(3))]).unwrap();
+    check(&db, "more", "small", "id < 10").unwrap();
+    assert!(
+        check(&db, "more", "tiny", "id < 2").is_err(),
+        "an existing row fails it"
+    );
+    clean(&db);
+}
+
 #[test]
 fn adding_a_check_validates_existing_rows_and_the_expression() {
     let d = Dir::new();

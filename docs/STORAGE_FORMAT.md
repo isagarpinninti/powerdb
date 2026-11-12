@@ -45,7 +45,7 @@ All are fjall keyspaces under `meta/`. A commit writes across them in one atomic
 | `rows` (layout 3) | table id (`u32` big-endian) + the primary key's key encoding ([TYPES_AND_TABLES.md](TYPES_AND_TABLES.md)) | The row (`types::row`: version byte, then `(column id, type tag, value)` in ascending id order). A null column is absent. |
 
 The `tables` keyspace also holds, under keys that start with the byte `1`, the last value of each sequence (`1` + table id + column id -> `u64`, big-endian). |
-| `indexes` (layout 3) | table id + index id (each `u32`, big-endian) + the indexed columns' key encoding (+ the row's primary key, for a foreign key) | The row's primary key. One entry per row per unique constraint and foreign key; none for a row with a null in an indexed column. Recomputed and compared by `powerdb check`. |
+| `indexes` (layout 3) | table id + index id (each `u32`, big-endian) + the indexed columns' key encoding (+ the row's primary key, for a foreign key) | The row's primary key. One entry per row per unique constraint, foreign key and user index; none for a row with a null in an indexed column. Recomputed and compared by `powerdb check`. |
 | `buckets` (layout 2) | bucket name | JSON `BucketDef` (`name`, `versioning`, `encrypt`, `created_at`) |
 | `objects` (layout 2) | `bucket` + `0x00` + `key` + `0x00` + version id | JSON `ObjectMeta`: stable object id, version id, delete-marker flag, file id (the manifest id), size, MIME type, filename, BLAKE3 checksum of the content, created time, custom metadata |
 | `users`, `keys`, `sys` | (auth module) | users with Argon2id hashes, API key hashes and scopes, server secrets |

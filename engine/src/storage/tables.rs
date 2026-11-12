@@ -37,6 +37,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// A row as a caller sees it: the table's columns in order, a null as `None`.
 pub type Row = Vec<(String, Option<Value>)>;
 
+/// One page of rows found through an index, and where to continue.
+#[derive(Debug, Clone)]
+pub struct IndexPage {
+    pub rows: Vec<Row>,
+    /// Pass back as `after` for the next page; `None` when this page was not full.
+    pub next: Option<Vec<u8>>,
+}
+
 /// A row's values by column id, defaults included: what the current schema reads it as.
 type Eff = Vec<(u32, Value)>;
 
@@ -134,6 +142,21 @@ fn entries(def: &TableDef, eff: &[(u32, Value)], pk: &[u8]) -> Result<Vec<Entry>
             value: pk.to_vec(),
             unique,
             constraint: k.name.clone(),
+        });
+    }
+    // indexes made on request: never unique (a unique one is a constraint), one entry per row whose columns are all non-null
+    for x in &def.indexes {
+        let Some(cols) = columns_key(eff, &x.columns)? else {
+            continue;
+        };
+        let mut key = index_prefix(def.id, x.index);
+        key.extend_from_slice(&cols);
+        key.extend_from_slice(pk);
+        out.push(Entry {
+            key,
+            value: pk.to_vec(),
+            unique: false,
+            constraint: x.name.clone(),
         });
     }
     Ok(out)
@@ -318,6 +341,14 @@ impl Db {
                     Error::Invalid(format!("the change cannot be made: {why} ({e})"))
                 })?;
                 match (&change, added) {
+                    (Change::AddIndex { name: iname, .. }, _) => {
+                        for e in entries(&new, &eff, pk)?
+                            .into_iter()
+                            .filter(|e| e.constraint == *iname)
+                        {
+                            batch.insert(&ks.indexes, e.key, e.value);
+                        }
+                    }
                     (Change::AddCheck { .. }, Some(c)) => {
                         if let ConstraintKind::Check { expr } = &c.kind {
                             self.check_one(&new, &c.name, expr, &eff).map_err(|e| {
@@ -367,6 +398,13 @@ impl Db {
                 for g in ks.indexes.prefix(index_prefix(old.id, index)) {
                     batch.remove(&ks.indexes, g.key()?.to_vec());
                 }
+            }
+        }
+        if let Change::DropIndex { name: iname } = &change
+            && let Some(x) = old.indexes.iter().find(|x| x.name == *iname)
+        {
+            for g in ks.indexes.prefix(index_prefix(old.id, x.index)) {
+                batch.remove(&ks.indexes, g.key()?.to_vec());
             }
         }
         batch.insert(&ks.tables, name.as_bytes().to_vec(), new.to_bytes()?);
@@ -858,6 +896,88 @@ impl Db {
             }
         }
         Ok(out)
+    }
+
+    /// Finds rows through an index (one made with `AddIndex`, or the index behind a unique constraint or foreign key, by its name): the rows whose leading
+    /// indexed columns equal `prefix` (it may name fewer values than the index has columns, but not more), in index order, then primary-key order. A row with
+    /// a null in any indexed column is not in the index. Pass the `next` of the previous page as `after` to continue.
+    pub fn scan_index(
+        &self,
+        table: &str,
+        index: &str,
+        prefix: &[Value],
+        after: Option<&[u8]>,
+        limit: usize,
+    ) -> Result<IndexPage> {
+        let def = self.table(table)?;
+        let (index_id, columns): (u32, &[u32]) =
+            if let Some(x) = def.indexes.iter().find(|x| x.name == index) {
+                (x.index, &x.columns)
+            } else if let Some(k) = def.constraints.iter().find(|k| k.name == index) {
+                match &k.kind {
+                    ConstraintKind::Unique { columns, index }
+                    | ConstraintKind::ForeignKey { columns, index, .. } => (*index, columns),
+                    ConstraintKind::Check { .. } => {
+                        return Err(Error::Invalid(format!(
+                            "\"{index}\" is a check, not an index"
+                        )));
+                    }
+                }
+            } else {
+                return Err(Error::NotFound(format!(
+                    "index \"{index}\" on table \"{table}\""
+                )));
+            };
+        if prefix.len() > columns.len() {
+            return Err(Error::Invalid(format!(
+                "the index \"{index}\" has {} column(s); {} values given",
+                columns.len(),
+                prefix.len()
+            )));
+        }
+        let mut start = index_prefix(def.id, index_id);
+        for (v, col) in prefix.iter().zip(columns) {
+            let c = def
+                .column_by_id(*col)
+                .ok_or_else(|| Error::Corrupt("an index column is missing".into()))?;
+            if v.type_of() != c.ty {
+                return Err(Error::Invalid(format!(
+                    "column \"{}\" holds {}, not {}",
+                    c.name,
+                    c.ty.name(),
+                    v.type_of().name()
+                )));
+            }
+            encode_key(&mut start, Some(v))?;
+        }
+        let lower = after.map(|a| a.to_vec()).unwrap_or_else(|| start.clone());
+        let limit = limit.clamp(1, MAX_SCAN);
+        let mut rows = Vec::new();
+        let mut last = None;
+        for g in self.inner.ks.indexes.range(lower.clone()..) {
+            let (k, v) = g.into_inner()?;
+            if !k.starts_with(&start) {
+                break;
+            }
+            if after.is_some() && k.as_ref() == lower.as_slice() {
+                continue;
+            }
+            let raw = self
+                .inner
+                .ks
+                .rows
+                .get(row_key(def.id, &v))?
+                .ok_or_else(|| {
+                    Error::Corrupt("an index entry points at a row that does not exist".into())
+                })?;
+            rows.push(def.project(&decode_row(&raw)?)?);
+            last = Some(k.to_vec());
+            if rows.len() >= limit {
+                break;
+            }
+        }
+        let next = if rows.len() >= limit { last } else { None };
+        Ok(IndexPage { rows, next })
     }
 
     pub fn count_rows(&self, table: &str) -> Result<u64> {

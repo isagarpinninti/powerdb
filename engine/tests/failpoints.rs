@@ -161,6 +161,14 @@ fn workload_child() {
         .unwrap();
         db.alter_table(
             "tc",
+            &Change::AddIndex {
+                name: "tc_tk_tag".into(),
+                columns: vec!["tk".into(), "tag".into()],
+            },
+        )
+        .unwrap();
+        db.alter_table(
+            "tc",
             &Change::AddForeignKey {
                 name: "tc_tt".into(),
                 columns: vec!["tk".into()],

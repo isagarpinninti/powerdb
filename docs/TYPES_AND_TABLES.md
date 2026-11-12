@@ -1,6 +1,16 @@
 # Design: types, tables, constraints and indexes (Phase 2)
 
-> **Status: slices 2a to 2d are built.** 2d adds constraints inside the commit (`engine/src/storage/tables.rs`): generated values (`uuid`, `now`, `sequence`), UNIQUE, CHECK and FOREIGN KEY with restrict, cascade and set null, plus the index entries that make a uniqueness check and a "which rows refer to this one" lookup an index read instead of a table scan. 19 tests (behaviour of each kind, and a random model over four linked tables with each delete mode, restarts and `powerdb check` every ten steps), and crash tests, including one that crashes at every commit of an insert, insert, cascading-delete workload. Each rule was shown to fail when broken.
+> **Status: slices 2a to 2e are built.** 2e adds user-created secondary indexes (`Change::AddIndex` / `DropIndex`) and finding rows through them (`Db::scan_index`), on the same index entries 2d introduced. An index covers one or more columns of any indexable type; a lookup names the first *k* of its columns (`k` up to all of them) and returns the matching rows in index order, then primary-key order, one page at a time with an opaque cursor. The index behind a unique constraint or a foreign key can be searched by the constraint's name. A row with a null in any indexed column is not in the index (so a lookup cannot find "where this is null"). An index is maintained in the same batch as every write, built from the existing rows when it is added, checked and recomputed by `powerdb check`, and a column it covers cannot be dropped or retyped (it can be renamed). 12 tests, including a random model that adds and drops indexes while rows change, and restarts, and compares every lookup with a plain filter and sort; each maintenance rule was shown to fail when broken.
+>
+> **Measured** (one Apple-silicon laptop, release build, 100,000 rows, one run): building an index took about 108 ms; 200 lookups each returning 100 rows took 18 ms in total (about 0.09 ms each), against about 38 ms for one full scan of the table through `scan_rows`. That is the cost of finding rows by an equal value, not a benchmark against any other database.
+>
+> **Not what the design said:** the index is built synchronously under the commit lock, in the same batch as the catalog change (writers wait while it runs), not in the background. A big table would hold writers for the length of the build; a background build that becomes visible when complete is still to do. Range scans (greater than, less than) and ordering by an indexed column are not exposed yet: they come with the query layer.
+>
+> **A fix found along the way:** a CHECK on a column called `id` rejected every row, because the shared expression language read a bare `id` as the record's own id (empty for a table row). A real field now wins over those names; collections cannot have such a field, so nothing changes for them.
+>
+> **Slices 2a to 2d** are described below, and 2d first:
+>
+> **Slice 2d:** 2d adds constraints inside the commit (`engine/src/storage/tables.rs`): generated values (`uuid`, `now`, `sequence`), UNIQUE, CHECK and FOREIGN KEY with restrict, cascade and set null, plus the index entries that make a uniqueness check and a "which rows refer to this one" lookup an index read instead of a table scan. 19 tests (behaviour of each kind, and a random model over four linked tables with each delete mode, restarts and `powerdb check` every ten steps), and crash tests, including one that crashes at every commit of an insert, insert, cascading-delete workload. Each rule was shown to fail when broken.
 >
 > **What the constraints do, and don't.**
 > - **UNIQUE** (single or composite): a row with a null in any of the columns is not constrained, so many rows can hold null (as in SQL).
@@ -129,7 +139,7 @@ B-tree style, kept as ordinary entries in the same LSM: `index id, encoded key c
 | 2b | The catalog: tables, columns, schema versions, `ALTER` | Model test of random schema changes against old rows; every cheap change shown not to rewrite data. |
 | 2c | Typed tables in storage beside collections; layout 3 | Done: the upgrade test from 0.4.0 data (with objects) and from 0.3.1; `check` extended; model and crash tests. The collection-adapter idea is deferred (see the status note). |
 | 2d | Constraints and foreign keys in the commit | Done: the model test over linked tables, crash points around the new writes, a crash at every commit of a cascading workload. Also introduced the index entries slice 2e will expose (the unique and foreign-key indexes). |
-| 2e | Secondary indexes | `check` proves them equal to the rows after every step of the model test. |
+| 2e | Secondary indexes | Done, except the background build: a model test compares every lookup with a plain filter and sort; `check` proves the index equal to the rows. |
 | 2f | `FILE` and `FILE[]` columns | Reference counting through the model test; deleting a row frees its files; an object cannot be removed while a row refers to it (or the policy chosen is stated). |
 | 2g | API, SDK, CLI and dashboard for typed tables | Contract pins for the new routes; real-server tests. |
 

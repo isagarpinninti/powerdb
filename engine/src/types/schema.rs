@@ -154,8 +154,19 @@ pub struct TableDef {
     pub primary_key: Vec<u32>,
     pub constraints: Vec<Constraint>,
     pub next_constraint_id: u32,
-    /// The id the next index gets (a unique constraint and a foreign key each keep one).
+    /// The id the next index gets (a unique constraint, a foreign key and a user index each keep one).
     pub next_index_id: u32,
+    /// Indexes made for lookups (`Change::AddIndex`): no constraint, just a faster way to find rows by these columns.
+    pub indexes: Vec<IndexDef>,
+}
+
+/// An index made on request, to find rows by some columns without reading the whole table. A row with a null in any of the columns has no entry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexDef {
+    pub name: String,
+    pub columns: Vec<u32>,
+    /// Names the entries in the `indexes` keyspace.
+    pub index: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -185,6 +196,14 @@ pub enum Change {
         on_delete: OnDelete,
     },
     DropConstraint {
+        name: String,
+    },
+    /// An index to look rows up by these columns (see `IndexDef`).
+    AddIndex {
+        name: String,
+        columns: Vec<String>,
+    },
+    DropIndex {
         name: String,
     },
     AddColumn {
@@ -298,6 +317,7 @@ impl TableDef {
             constraints: vec![],
             next_constraint_id: 1,
             next_index_id: 1,
+            indexes: vec![],
         })
     }
 
@@ -609,9 +629,7 @@ impl TableDef {
             Change::AddCheck { name, expr } => {
                 t.new_constraint_name(name)?;
                 for c in Self::expr_columns(expr)? {
-                    if t.column(&c).is_none()
-                        && !["id", "created_at", "updated_at", "collection"].contains(&c.as_str())
-                    {
+                    if t.column(&c).is_none() {
                         return Err(Error::Invalid(format!(
                             "the check reads a column \"{c}\" that the table does not have"
                         )));
@@ -691,6 +709,28 @@ impl TableDef {
                     .ok_or_else(|| Error::NotFound(format!("constraint \"{name}\"")))?;
                 t.constraints.remove(i);
             }
+            Change::AddIndex { name, columns } => {
+                t.new_constraint_name(name)?;
+                let ids = t.key_columns(columns, "an index")?;
+                t.indexes.push(IndexDef {
+                    name: name.clone(),
+                    columns: ids,
+                    index: t.next_index_id,
+                });
+                t.next_index_id += 1;
+                if !table_is_empty {
+                    effect =
+                        Effect::NeedsScan("the index is built from the rows that exist".into());
+                }
+            }
+            Change::DropIndex { name } => {
+                let i = t
+                    .indexes
+                    .iter()
+                    .position(|x| x.name == *name)
+                    .ok_or_else(|| Error::NotFound(format!("index \"{name}\"")))?;
+                t.indexes.remove(i);
+            }
         }
         t.version += 1;
         Ok((t, effect))
@@ -764,6 +804,14 @@ impl TableDef {
                 )));
             }
         }
+        for x in &self.indexes {
+            if x.columns.contains(&c.id) {
+                return Err(Error::Invalid(format!(
+                    "\"{}\" is used by the index \"{}\" and cannot be {what}; drop the index first",
+                    c.name, x.name
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -773,9 +821,11 @@ impl TableDef {
                 "constraint name \"{name}\" must be lowercase letters, digits and underscores, starting with a letter (at most {MAX_NAME})"
             )));
         }
-        if self.constraints.iter().any(|k| k.name == name) {
+        if self.constraints.iter().any(|k| k.name == name)
+            || self.indexes.iter().any(|x| x.name == name)
+        {
             return Err(Error::Conflict(format!(
-                "constraint \"{name}\" already exists"
+                "\"{name}\" is already the name of a constraint or an index on this table"
             )));
         }
         Ok(())
@@ -943,6 +993,7 @@ impl TableDef {
             "format": 1, "id": self.id, "name": self.name, "version": self.version, "next_column_id": self.next_column_id,
             "primary_key": self.primary_key, "columns": cols, "constraints": constraints,
             "next_constraint_id": self.next_constraint_id, "next_index_id": self.next_index_id,
+            "indexes": self.indexes.iter().map(|x| serde_json::json!({"name": x.name, "columns": x.columns, "index": x.index})).collect::<Vec<_>>(),
         }))?)
     }
 
@@ -1066,8 +1117,20 @@ impl TableDef {
                 kind,
             });
         }
+        let mut indexes = Vec::new();
+        for x in v["indexes"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+            indexes.push(IndexDef {
+                name: x["name"]
+                    .as_str()
+                    .ok_or_else(|| corrupt("an index name"))?
+                    .to_string(),
+                columns: ids(x, "columns")?,
+                index: u(x, "index")?,
+            });
+        }
         Ok(Self {
             constraints,
+            indexes,
             next_constraint_id: v["next_constraint_id"]
                 .as_u64()
                 .and_then(|n| u32::try_from(n).ok())

@@ -48,7 +48,7 @@ The lowest-risk, highest-differentiation step: files that exist without a record
 
 Exit: a bucket and objects work with no table; a test uploads a 1 GiB object with bounded memory; backup and restore round-trip objects, versions and metadata; crash tests cover interrupted uploads.
 
-### Phase 2: typed tables and integrity — slices 2a to 2d built (see [TYPES_AND_TABLES.md](TYPES_AND_TABLES.md)) (about 6 to 10 weeks)
+### Phase 2: typed tables and integrity — slices 2a to 2e built (see [TYPES_AND_TABLES.md](TYPES_AND_TABLES.md)) (about 6 to 10 weeks)
 
 - **Layout 2, step 2.** The type system: `BOOLEAN`, sized and unsigned integers, `FLOAT32/64`, `DECIMAL`, `TEXT`, `UUID`, `DATE`, `TIME`, `TIMESTAMP(TZ)`, `JSON`, `BINARY`, `ENUM`, arrays, nullable; stored in a typed row encoding. Designed so a type can be added later without invalidating old rows (the future `VECTOR`, `EMBEDDING` and full-text types fit the same slot).
 - Schema catalog with versions and `ALTER` that migrates or refuses; a collection becomes a table whose columns include a JSON column, so existing collections map onto the new model.
