@@ -158,6 +158,8 @@ pub struct TableDef {
     pub next_index_id: u32,
     /// Indexes made for lookups (`Change::AddIndex`): no constraint, just a faster way to find rows by these columns.
     pub indexes: Vec<IndexDef>,
+    /// Encrypt the files uploaded through this table at rest (chosen when the table is created, as for a collection or a bucket).
+    pub encrypt: bool,
 }
 
 /// An index made on request, to find rows by some columns without reading the whole table. A row with a null in any of the columns has no entry.
@@ -318,6 +320,7 @@ impl TableDef {
             next_constraint_id: 1,
             next_index_id: 1,
             indexes: vec![],
+            encrypt: false,
         })
     }
 
@@ -381,8 +384,8 @@ impl TableDef {
         }
         for c in &self.columns {
             let ok = match &c.ty {
-                Type::Enum | Type::File | Type::Number => false,
-                Type::Array(t) => !matches!(**t, Type::Enum | Type::File | Type::Number),
+                Type::Enum | Type::Number => false,
+                Type::Array(t) => !matches!(**t, Type::Enum | Type::Number),
                 _ => true,
             };
             if !ok {
@@ -483,6 +486,11 @@ impl TableDef {
                     return Err(Error::Conflict(format!("column \"{name}\" already exists")));
                 }
                 if let Some(d) = default {
+                    if ty.is_file_column() {
+                        return Err(Error::Invalid(format!(
+                            "a file column cannot have a default (\"{name}\"): a file is attached to a row, never invented for it"
+                        )));
+                    }
                     if d.type_of() != *ty {
                         return Err(Error::Invalid(format!(
                             "the default of \"{name}\" must be a {ty:?}"
@@ -990,7 +998,7 @@ impl TableDef {
             })
             .collect();
         Ok(serde_json::to_vec(&serde_json::json!({
-            "format": 1, "id": self.id, "name": self.name, "version": self.version, "next_column_id": self.next_column_id,
+            "format": 1, "encrypt": self.encrypt, "id": self.id, "name": self.name, "version": self.version, "next_column_id": self.next_column_id,
             "primary_key": self.primary_key, "columns": cols, "constraints": constraints,
             "next_constraint_id": self.next_constraint_id, "next_index_id": self.next_index_id,
             "indexes": self.indexes.iter().map(|x| serde_json::json!({"name": x.name, "columns": x.columns, "index": x.index})).collect::<Vec<_>>(),
@@ -1131,6 +1139,7 @@ impl TableDef {
         Ok(Self {
             constraints,
             indexes,
+            encrypt: v["encrypt"].as_bool().unwrap_or(false),
             next_constraint_id: v["next_constraint_id"]
                 .as_u64()
                 .and_then(|n| u32::try_from(n).ok())

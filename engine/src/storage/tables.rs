@@ -21,17 +21,17 @@
 //! Index entries are always computed from the row as the current schema reads it (defaults included), so the entries made while a constraint was added
 //! to a table that already had rows are the same as the ones recomputed on a later update.
 
-use super::Db;
+use super::{Db, PendingFile};
 use crate::error::{Error, Result};
 use crate::model::Record;
 use crate::security::expr::{self, Ctx};
-use crate::types::Value;
 use crate::types::convert::{row_view, uuid_v7};
 use crate::types::key::encode_key;
 use crate::types::row::{decode_row, encode_row};
 use crate::types::schema::{
     Change, ColumnDef, Constraint, ConstraintKind, Effect, Generator, OnDelete, TableDef,
 };
+use crate::types::{FileValue, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A row as a caller sees it: the table's columns in order, a null as `None`.
@@ -59,6 +59,32 @@ fn row_key(table_id: u32, key: &[u8]) -> Vec<u8> {
     k.extend_from_slice(&table_id.to_be_bytes());
     k.extend_from_slice(key);
     k
+}
+
+/// The files a value holds: itself if it is a file, each element if it is a list of files.
+fn file_values(v: &Value) -> Vec<&FileValue> {
+    match v {
+        Value::File(f) => vec![f],
+        Value::Array(_, items) => items
+            .iter()
+            .filter_map(|i| {
+                if let Value::File(f) = i {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// The ids of every file stored in these columns, one entry per reference (a file named twice counts twice). This counts what is physically in the row,
+/// which is what the stored reference counts must equal: a column dropped from the schema keeps its value until the row is rewritten.
+pub(crate) fn file_ids(cols: &[(u32, Value)]) -> Vec<[u8; 32]> {
+    cols.iter()
+        .flat_map(|(_, v)| file_values(v).into_iter().map(|f| f.id))
+        .collect()
 }
 
 fn seq_key(table_id: u32, column_id: u32) -> Vec<u8> {
@@ -331,6 +357,32 @@ impl Db {
         let change = self.resolve_change(&old, change)?;
         let (new, effect) = old.apply(&change, !self.has_rows(old.id)?)?;
         let mut batch = self.inner.store.batch();
+        // Dropping a file column releases its files: the value would otherwise sit in every row, keeping the file alive, with no column to remove it from.
+        if let Change::DropColumn { name: cname } = &change
+            && let Some(col) = old.column(cname)
+            && col.ty.is_file_column()
+        {
+            let cid = col.id;
+            let mut delta: HashMap<[u8; 32], i64> = HashMap::new();
+            for g in ks.rows.prefix(old.id.to_be_bytes()) {
+                let (k, v) = g.into_inner()?;
+                let mut raw = decode_row(&v)?;
+                let held: Vec<[u8; 32]> = file_ids(
+                    &raw.iter()
+                        .filter(|(i, _)| *i == cid)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+                if !held.is_empty() || raw.iter().any(|(i, _)| *i == cid) {
+                    raw.retain(|(i, _)| *i != cid);
+                    batch.insert(&ks.rows, k.to_vec(), encode_row(&raw)?);
+                    for id in held {
+                        *delta.entry(id).or_default() -= 1;
+                    }
+                }
+            }
+            self.apply_file_deltas(&mut batch, &delta, &[])?;
+        }
         if let Effect::NeedsScan(why) = effect {
             let added = new.constraints.last();
             let mut seen: HashSet<Vec<u8>> = HashSet::new();
@@ -431,9 +483,18 @@ impl Db {
             (&ks.indexes, def.id.to_be_bytes().to_vec()),
         ] {
             loop {
+                let is_rows = std::ptr::eq(space, &ks.rows);
                 let mut keys = Vec::new();
+                let mut delta: HashMap<[u8; 32], i64> = HashMap::new();
                 for g in space.prefix(&prefix).take(DROP_BATCH) {
-                    keys.push(g.key()?.to_vec());
+                    let (k, v) = g.into_inner()?;
+                    if is_rows {
+                        // every file a row holds is released with it
+                        for id in file_ids(&decode_row(&v)?) {
+                            *delta.entry(id).or_default() -= 1;
+                        }
+                    }
+                    keys.push(k.to_vec());
                 }
                 if keys.is_empty() {
                     break;
@@ -442,8 +503,9 @@ impl Db {
                 for k in &keys {
                     batch.remove(space, k.clone());
                 }
-                if std::ptr::eq(space, &ks.rows) {
+                if is_rows {
                     removed += keys.len() as u64;
+                    self.apply_file_deltas(&mut batch, &delta, &[])?;
                 }
                 self.finish_batch(batch)?;
             }
@@ -596,6 +658,74 @@ impl Db {
 
     /// Inserts a row, naming each value. Columns left out take their generated value or their default, or are null if the column allows it. Returns the primary key.
     pub fn insert_row(&self, table: &str, values: &[(&str, Value)]) -> Result<Vec<Value>> {
+        self.insert_row_with(table, values, &[])
+    }
+
+    /// Stages a file for a row of `table` (encrypted if the table is). Nothing refers to it until a row that holds `PendingFile::file_value` is written
+    /// with `insert_row_with` or `update_row_with`; if that never happens the bytes are garbage that compaction removes.
+    pub fn stage_table_file(
+        &self,
+        table: &str,
+        mime: &str,
+        name: Option<&str>,
+        reader: impl std::io::Read,
+    ) -> Result<PendingFile> {
+        let def = self.table(table)?;
+        self.stage_with(def.encrypt, mime, name, reader)
+    }
+
+    /// The value that makes a row refer to the file an object holds (a version of it, or the newest). The row then keeps that file alive by itself: it does
+    /// not depend on the object afterwards, and deleting the object does not touch the row.
+    pub fn file_value_of_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version: Option<&str>,
+    ) -> Result<FileValue> {
+        let m = self.get_object(bucket, key, version)?;
+        Ok(FileValue {
+            id: crate::util::from_hex_32(&m.file_id)
+                .ok_or_else(|| Error::Corrupt("an object has a bad file id".into()))?,
+            size: m.size,
+            mime: m.mime,
+            name: m.filename,
+        })
+    }
+
+    /// Every file value in `cols` must be a file that is stored (or staged with this write) and whose size is the stored size: a row cannot claim a
+    /// size or refer to a file that is not there.
+    fn check_files(&self, cols: &[(u32, Value)], staged: &[&PendingFile]) -> Result<()> {
+        for (_, v) in cols {
+            for f in file_values(v) {
+                let size = match staged.iter().find(|p| p.file_id == f.id) {
+                    Some(p) => p.size(),
+                    None => match self.inner.ks.files.get(f.id)? {
+                        Some(m) => crate::types::schema_manifest_size(&m)?,
+                        None => {
+                            return Err(Error::NotFound(
+                                "a file this row refers to is not stored".into(),
+                            ));
+                        }
+                    },
+                };
+                if size != f.size {
+                    return Err(Error::Invalid(format!(
+                        "a file value says {} bytes, but the stored file is {size}",
+                        f.size
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Like `insert_row`, with files staged for it. A file value in `values` must be one of `staged` or a file that is already stored.
+    pub fn insert_row_with(
+        &self,
+        table: &str,
+        values: &[(&str, Value)],
+        staged: &[&PendingFile],
+    ) -> Result<Vec<Value>> {
         let ks = &self.inner.ks;
         let _g = self.inner.commit.lock().unwrap_or_else(|e| e.into_inner());
         let def = self.table(table)?; // read under the lock: the table cannot be altered or dropped between here and the write
@@ -631,6 +761,7 @@ impl Db {
         let eff = effective(&def, &row)?;
         self.check_constraints(&def, &eff)?;
         self.check_fks(&def, &eff, None)?;
+        self.check_files(&row, staged)?;
         let pk = def.key_for_row(&row)?;
         if ks.rows.contains_key(row_key(def.id, &pk))? {
             return Err(Error::Conflict(format!(
@@ -639,6 +770,11 @@ impl Db {
         }
         let mut batch = self.inner.store.batch();
         self.write_row(&mut batch, &def, None, &eff, &row, &pk)?;
+        let mut delta: HashMap<[u8; 32], i64> = HashMap::new();
+        for id in file_ids(&row) {
+            *delta.entry(id).or_default() += 1;
+        }
+        self.apply_file_deltas(&mut batch, &delta, staged)?;
         for (col, n) in &counters {
             batch.insert(&ks.tables, seq_key(def.id, *col), n.to_be_bytes().to_vec());
         }
@@ -661,6 +797,18 @@ impl Db {
         table: &str,
         pk: &[Value],
         patch: &[(&str, Option<Value>)],
+    ) -> Result<Row> {
+        self.update_row_with(table, pk, patch, &[])
+    }
+
+    /// Like `update_row`, with files staged for it. A file value in `patch` must be one of `staged` or a file that is already stored. A file the row no
+    /// longer holds is released.
+    pub fn update_row_with(
+        &self,
+        table: &str,
+        pk: &[Value],
+        patch: &[(&str, Option<Value>)],
+        staged: &[&PendingFile],
     ) -> Result<Row> {
         let ks = &self.inner.ks;
         let _g = self.inner.commit.lock().unwrap_or_else(|e| e.into_inner());
@@ -715,6 +863,7 @@ impl Db {
         let new_eff = effective(&def, &cols)?;
         self.check_constraints(&def, &new_eff)?;
         self.check_fks(&def, &new_eff, None)?;
+        self.check_files(&cols, staged)?;
         let mut batch = self.inner.store.batch();
         self.write_row(
             &mut batch,
@@ -724,6 +873,15 @@ impl Db {
             &cols,
             &pk_bytes,
         )?;
+        // the files the row held as stored, and the files it holds now
+        let mut delta: HashMap<[u8; 32], i64> = HashMap::new();
+        for id in file_ids(&decode_row(&old)?) {
+            *delta.entry(id).or_default() -= 1;
+        }
+        for id in file_ids(&cols) {
+            *delta.entry(id).or_default() += 1;
+        }
+        self.apply_file_deltas(&mut batch, &delta, staged)?;
         self.finish_batch(batch)?;
         Ok(after)
     }
@@ -863,6 +1021,30 @@ impl Db {
                 key,
             )?;
         }
+        // the files: every doomed row releases what it holds as stored; a row that was set to null holds what it now holds instead of what it held
+        let mut delta: HashMap<[u8; 32], i64> = HashMap::new();
+        for (tid, key) in doomed.keys() {
+            let raw = ks
+                .rows
+                .get(row_key(*tid, key))?
+                .ok_or_else(|| Error::Corrupt("a row to delete is gone".into()))?;
+            for id in file_ids(&decode_row(&raw)?) {
+                *delta.entry(id).or_default() -= 1;
+            }
+        }
+        for ((tid, key), (_, new_eff)) in &nulled {
+            let raw = ks
+                .rows
+                .get(row_key(*tid, key))?
+                .ok_or_else(|| Error::Corrupt("a row to change is gone".into()))?;
+            for id in file_ids(&decode_row(&raw)?) {
+                *delta.entry(id).or_default() -= 1;
+            }
+            for id in file_ids(new_eff) {
+                *delta.entry(id).or_default() += 1;
+            }
+        }
+        self.apply_file_deltas(&mut batch, &delta, &[])?;
         self.finish_batch(batch)?;
         Ok(true)
     }

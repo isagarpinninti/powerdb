@@ -184,6 +184,16 @@ impl PendingFile {
     pub fn size(&self) -> u64 {
         self.manifest.size
     }
+    /// The value a typed-table row holds to refer to this file (see `Db::insert_row_with`).
+    pub fn file_value(&self) -> crate::types::FileValue {
+        crate::types::FileValue {
+            id: self.file_id,
+            size: self.manifest.size,
+            mime: self.mime.clone(),
+            name: self.name.clone(),
+        }
+    }
+
     pub fn file_ref(&self) -> FileRef {
         FileRef {
             id: hex(&self.file_id),

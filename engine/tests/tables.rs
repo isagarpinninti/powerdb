@@ -110,7 +110,7 @@ fn creating_tables_checks_the_definition() {
     assert!(bad.set_primary_key(&["j"]).is_err(), "json key");
     assert!(bad.set_primary_key(&["zz"]).is_err(), "unknown column");
     // types not available in tables yet
-    for ty in [Type::Enum, Type::File, Type::Number] {
+    for ty in [Type::Enum, Type::Number] {
         let mut t = TableDef::new("x").unwrap();
         t = t.apply(&add("id", Type::I32, false, None), true).unwrap().0;
         t = t.apply(&add("c", ty.clone(), true, None), true).unwrap().0;

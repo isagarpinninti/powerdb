@@ -101,7 +101,17 @@ pub fn json_view(v: &Value) -> J {
         Value::Timestamp(t) => J::String(format_timestamp(*t, false)),
         Value::TimestampTz(t) => J::String(format_timestamp(*t, true)),
         Value::Json(j) => j.clone(),
-        Value::Binary(_) | Value::File(_) => J::Null,
+        Value::Binary(_) => J::Null,
+        // a file shows its labels, so a CHECK can say `doc != null && doc.size < 5000000`
+        Value::File(f) => {
+            let mut m = Map::new();
+            m.insert("size".into(), J::from(f.size));
+            m.insert("mime".into(), J::String(f.mime.clone()));
+            if let Some(n) = &f.name {
+                m.insert("name".into(), J::String(n.clone()));
+            }
+            J::Object(m)
+        }
         Value::Enum(i) => J::from(*i),
         Value::Array(_, items) => J::Array(items.iter().map(json_view).collect()),
         Value::Number(n) => J::Number(n.clone()),

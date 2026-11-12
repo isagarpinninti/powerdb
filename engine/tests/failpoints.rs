@@ -135,6 +135,7 @@ fn workload_child() {
             ("k", Type::I64, false),
             ("tk", Type::I64, true),
             ("tag", Type::Text, true),
+            ("doc", Type::File, true),
         ] {
             c = c
                 .apply(
@@ -221,13 +222,24 @@ fn workload_child() {
             db.insert_row("tt", &[("k", V::I64(k)), ("v", V::Text("a".into()))])
                 .unwrap();
             say(format!("ACK trow {k} a"));
-            db.insert_row(
+            // each child holds a file (four distinct contents between them, so some are shared), which goes with the child
+            let file = db
+                .stage_table_file(
+                    "tc",
+                    "application/octet-stream",
+                    None,
+                    Cursor::new(bytes_of(((k % 4) as u8, 0))),
+                )
+                .unwrap();
+            db.insert_row_with(
                 "tc",
                 &[
                     ("k", V::I64(k)),
                     ("tk", V::I64(k)),
                     ("tag", V::Text(format!("t{k}"))),
+                    ("doc", V::File(file.file_value())),
                 ],
+                &[&file],
             )
             .unwrap();
             if i % 3 == 2 {

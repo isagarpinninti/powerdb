@@ -36,7 +36,7 @@ All are fjall keyspaces under `meta/`. A commit writes across them in one atomic
 | `collections` | collection name | JSON `CollectionDef` (fields, rules, `encrypt`, `created_at`) |
 | `records` | `collection` + `0x00` + record id | JSON `Record` (`id`, `collection`, `created_at`, `updated_at`, `fields`, `files`) |
 | `files` | manifest id (32 bytes: BLAKE3 of the manifest) | manifest: ordered list of chunk key and length |
-| `file_refs` | manifest id | `u64` LE: number of references to this file: record file fields plus object versions |
+| `file_refs` | manifest id | `u64` LE: number of references to this file: record file fields, object versions, and file values in typed-table rows (a file named twice in a row counts twice) |
 | `chunks` | chunk key (32 bytes) | pointer: segment `u32`, offset `u64`, stored length `u32`, raw length `u32`, flags `u8` (21 bytes, LE) |
 | `chunk_refs` | chunk key | `u64` LE: number of manifests that contain this chunk |
 | `gc_queue` | manifest id | a dead file waiting to have its chunks released |

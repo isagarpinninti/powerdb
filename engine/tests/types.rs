@@ -194,14 +194,22 @@ fn value(r: &mut Rng, t: &Type) -> Value {
             (0..r.below(5)).map(|_| value(r, e)).collect(),
         ),
         Type::File => {
-            let mut f = FileValue {
-                object: [0; 16],
-                version: [0; 16],
-            };
-            for b in f.object.iter_mut().chain(f.version.iter_mut()) {
+            let mut id = [0u8; 32];
+            for b in &mut id {
                 *b = r.next() as u8;
             }
-            Value::File(f)
+            let name = match r.below(3) {
+                0 => None,
+                1 => Some(String::new()),
+                _ => Some(text(r)),
+            };
+            Value::File(FileValue {
+                id,
+                size: r.pick(&[0u64, 1, u64::MAX, n]),
+                mime: ["", "text/plain", "application/octet-stream", "image/png"][r.below(4)]
+                    .to_string(),
+                name,
+            })
         }
         Type::Number => Value::Number(match r.below(3) {
             0 => serde_json::Number::from(r.next() as i64),
@@ -332,6 +340,22 @@ fn malformed_rows_are_refused() {
             [vec![1, 1, 1, 12, 0, 0xFE], vec![0xFF; 17], vec![0x03]].concat(),
         ),
         ("a decimal scale of 99", vec![1, 1, 1, 12, 99, 2]),
+        (
+            "a file with a name flag that is neither 0 nor 1",
+            [vec![1, 1, 1, 23], vec![0; 32], vec![5, 0, 7]].concat(),
+        ),
+        (
+            "a file whose type is longer than allowed",
+            [vec![1, 1, 1, 23], vec![0; 32], vec![5, 0xFF, 0x7F]].concat(),
+        ),
+        (
+            "a file cut off after its id",
+            [vec![1, 1, 1, 23], vec![0; 32]].concat(),
+        ),
+        (
+            "a file whose name is not UTF-8",
+            [vec![1, 1, 1, 23], vec![0; 32], vec![5, 0, 1, 2, 0xFF, 0xFE]].concat(),
+        ),
         (
             "a legacy number in a non-canonical kind",
             vec![1, 1, 1, 24, 1, 2],
@@ -685,8 +709,10 @@ fn only_orderable_types_can_be_indexed() {
         Value::Json(serde_json::json!({})),
         Value::Array(Type::I32, vec![]),
         Value::File(FileValue {
-            object: [0; 16],
-            version: [0; 16],
+            id: [0; 32],
+            size: 0,
+            mime: String::new(),
+            name: None,
         }),
         Value::Number(serde_json::Number::from(1)),
     ] {

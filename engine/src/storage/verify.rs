@@ -104,6 +104,26 @@ impl Db {
             }
         }
 
+        // typed table rows: each file value in a row (a file column, or each element of a list of files) is one use of that file. This reads the
+        // rows as stored, so a value left in a row by a dropped column still counts, which is what the stored counts hold.
+        for g in ks.rows.iter() {
+            let (_, v) = g.into_inner()?;
+            if let Ok(cols) = decode_row(&v) {
+                for id in super::tables::file_ids(&cols) {
+                    *file_uses.entry(id).or_default() += 1;
+                    if !ks.files.contains_key(id)? {
+                        note(
+                            &mut r,
+                            format!(
+                                "a table row refers to the file {}, which is missing",
+                                hex(&id)
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
         // the files, their chunks, and from them the number of files that use each chunk
         let mut chunk_uses: HashMap<[u8; 32], u64> = HashMap::new();
         for g in ks.files.iter() {

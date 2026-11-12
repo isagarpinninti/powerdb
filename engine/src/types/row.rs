@@ -185,8 +185,25 @@ fn put_value(out: &mut Vec<u8>, v: &Value) -> Result<()> {
             }
         }
         Value::File(f) => {
-            out.extend_from_slice(&f.object);
-            out.extend_from_slice(&f.version);
+            if f.mime.len() > MAX_FILE_MIME
+                || f.name.as_ref().is_some_and(|n| n.len() > MAX_FILE_NAME)
+            {
+                return Err(invalid(format!(
+                    "a file's type is at most {MAX_FILE_MIME} bytes and its name at most {MAX_FILE_NAME}"
+                )));
+            }
+            out.extend_from_slice(&f.id);
+            put_uvar(out, f.size as u128);
+            put_uvar(out, f.mime.len() as u128);
+            out.extend_from_slice(f.mime.as_bytes());
+            match &f.name {
+                None => out.push(0),
+                Some(n) => {
+                    out.push(1);
+                    put_uvar(out, n.len() as u128);
+                    out.extend_from_slice(n.as_bytes());
+                }
+            }
         }
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -280,15 +297,37 @@ fn get_value(r: &mut Reader, ty: &Type) -> Result<Value> {
             Value::Array(elem, items)
         }
         Type::File => {
-            let object: [u8; 16] = r
-                .take(16)?
+            let id: [u8; 32] = r
+                .take(32)?
                 .try_into()
                 .map_err(|_| bad("a file reference"))?;
-            let version: [u8; 16] = r
-                .take(16)?
-                .try_into()
-                .map_err(|_| bad("a file reference"))?;
-            Value::File(FileValue { object, version })
+            let size = r.uvar(64)? as u64;
+            let n = r.uvar(32)? as usize;
+            if n > MAX_FILE_MIME {
+                return Err(bad("a file type that is too long"));
+            }
+            let mime = String::from_utf8(r.take(n)?.to_vec())
+                .map_err(|_| bad("a file type that is not valid UTF-8"))?;
+            let name = match r.byte()? {
+                0 => None,
+                1 => {
+                    let n = r.uvar(32)? as usize;
+                    if n > MAX_FILE_NAME {
+                        return Err(bad("a file name that is too long"));
+                    }
+                    Some(
+                        String::from_utf8(r.take(n)?.to_vec())
+                            .map_err(|_| bad("a file name that is not valid UTF-8"))?,
+                    )
+                }
+                _ => return Err(bad("a file name flag")),
+            };
+            Value::File(FileValue {
+                id,
+                size,
+                mime,
+                name,
+            })
         }
         Type::Number => match r.byte()? {
             0 => Value::Number(serde_json::Number::from(r.ivar(64)? as i64)),

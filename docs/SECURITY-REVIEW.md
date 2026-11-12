@@ -26,6 +26,11 @@ libFuzzer targets in `fuzz/`). Platform-specific code is exercised in CI on Linu
 - **Keys are labels, never paths.** They are never turned into a file name; the rules (no control characters, no leading `/`, no `.` or `..` segment, at most 1024 bytes) keep them unambiguous. Metadata names and values are length- and character-limited.
 - **Not covered:** no quotas per bucket, no per-object permissions, no audit log of who read what.
 
+## Files in typed tables (unreleased, engine level)
+- A row cannot claim a size or point at a file that is not stored: the value is checked against the stored file (or the one staged with the write).
+- Reference counts equal the file values physically in rows, records and objects, and `powerdb check` recounts them; a miscount in the dangerous direction (a premature release) was shown to be caught by the tests.
+- Not yet applied: the magic-byte content check, size limits and the HTTP permissions. They belong to the table routes (slice 2g); until then file columns are an engine feature only, and nothing reachable over HTTP writes them.
+
 ## Designed in (and tested)
 - **OAuth:** authorization-code flow with PKCE; single-use, provider-bound, expiring state; exact-match redirect allow-list (no open redirect);
   token in the URL fragment; verified emails only; administrators excluded unless `allow_admin`; accounts created only with open registration.

@@ -12,12 +12,26 @@ pub mod schema;
 
 pub use decimal::Decimal;
 
-/// A file column's value: which object, and which version of it. (Resolving this to bytes goes through the object catalog.)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A file column's value: a reference to a stored file (its id is the hash of its manifest, so it names the *content*) with the labels a row keeps
+/// about it. The bytes live in the chunk store, once, whoever refers to them; a row, a record and an object can all hold the same file, and the file goes
+/// when the last reference does.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileValue {
-    pub object: [u8; 16],
-    pub version: [u8; 16],
+    pub id: [u8; 32],
+    pub size: u64,
+    pub mime: String,
+    pub name: Option<String>,
 }
+
+/// The size recorded in a stored file manifest (its first eight bytes), for checking a file value against the file it names.
+pub fn schema_manifest_size(manifest: &[u8]) -> crate::error::Result<u64> {
+    crate::storage::model::Manifest::from_bytes(manifest)
+        .map(|m| m.size)
+        .ok_or_else(|| crate::error::Error::Corrupt("a stored file manifest".into()))
+}
+
+pub const MAX_FILE_MIME: usize = 255;
+pub const MAX_FILE_NAME: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -199,7 +213,7 @@ impl Type {
         }
     }
 
-    /// The inverse of `name`, for the types a table column may have today (no `enum`, `file` or the legacy `number`: those are not available in tables yet).
+    /// The inverse of `name`, for the types a table column may have today (no `enum` or the legacy `number`: those are not available in tables yet).
     pub fn parse_column_type(s: &str) -> Option<Type> {
         if let Some(inner) = s.strip_prefix("array<").and_then(|r| r.strip_suffix('>')) {
             let t = Type::parse_column_type(inner)?;
@@ -230,8 +244,18 @@ impl Type {
             "timestamptz" => Type::TimestampTz,
             "json" => Type::Json,
             "binary" => Type::Binary,
+            "file" => Type::File,
             _ => return None,
         })
+    }
+
+    /// A `file` column, or a list of files: the columns whose values keep stored files alive.
+    pub fn is_file_column(&self) -> bool {
+        match self {
+            Type::File => true,
+            Type::Array(t) => **t == Type::File,
+            _ => false,
+        }
     }
 
     /// Whether a value of this type can be part of an index key.
